@@ -3,3 +3,4 @@ tgcrypto
 motor
 mega.py
 ffmpeg-python
+aiohttp
