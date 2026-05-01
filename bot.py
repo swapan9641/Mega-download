@@ -181,24 +181,26 @@ async def handle_mega(client, message):
     
     url = url_match.group(1)
     
-    # 2. Convert new Mega URL formats to the classic format for Megatools compatibility
-    if "/folder/" in url:
-        url = url.replace("/folder/", "/#F!").replace("#", "!")
-    elif "/file/" in url:
-        url = url.replace("/file/", "/#!").replace("#", "!")
+    # 2. PROPERLY convert new Mega URL formats to classic format
+    if "/folder/" in url and "#" in url:
+        parts = url.split("#")
+        url = f"{parts.replace('/folder/', '/#F!')}!{parts}"
+    elif "/file/" in url and "#" in url:
+        parts = url.split("#")
+        url = f"{parts.replace('/file/', '/#!')}!{parts}"
         
     status_msg = await message.reply("⏳ Connecting to Mega...")
     user = await get_user(message.from_user.id)
     
-    # 3. Create a unique temporary folder for this specific download task
+    # 3. Create a unique temporary folder
     task_id = str(uuid.uuid4())
     task_dir = os.path.join(DOWNLOAD_DIR, task_id)
     os.makedirs(task_dir, exist_ok=True)
     
     try:
-        await status_msg.edit("📥 Downloading from Mega... (Folder Support Enabled)")
+        await status_msg.edit(f"📥 Downloading from Mega... (Folder Support Enabled)")
         
-        # 4. Use megatools to download the file/folder
+        # 4. Use megatools to download
         cmd = f"megadl '{url}' --path '{task_dir}'"
         process = await asyncio.create_subprocess_shell(
             cmd,
@@ -213,7 +215,7 @@ async def handle_mega(client, message):
             
         await status_msg.edit("📂 Processing and uploading downloaded files...")
         
-        # 5. Walk through the unique task directory and upload every file
+        # 5. Walk through and upload
         uploaded_count = 0
         for root, dirs, files in os.walk(task_dir):
             for file in files:
@@ -222,7 +224,9 @@ async def handle_mega(client, message):
                 uploaded_count += 1
                 
         if uploaded_count == 0:
-            await status_msg.edit("⚠️ Download completed, but no files were found.")
+            # Added debug output so we can see what megatools is thinking if it fails
+            debug_info = stderr.decode() or stdout.decode()
+            await status_msg.edit(f"⚠️ Download completed, but no files were found.\n\n**Debug Log:**\n`{debug_info[:800]}`")
         else:
             await status_msg.delete()
             
@@ -231,7 +235,7 @@ async def handle_mega(client, message):
         await status_msg.edit(f"❌ Error processing link:\n`{str(e)}`")
         
     finally:
-        # 6. Always clean up the temporary folder when done
+        # 6. Clean up
         if os.path.exists(task_dir):
             shutil.rmtree(task_dir, ignore_errors=True)
 
