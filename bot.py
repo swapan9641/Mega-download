@@ -205,63 +205,94 @@ async def process_file(client, message, file_path, status_msg, user):
 
 @app.on_message(filters.regex(r"(?i)mega\.nz") & filters.private)
 async def handle_mega(client, message):
-    status_msg = await message.reply("🔍 **Analyzing Link...** Extracting secure keys and verifying format.")
+    status_msg = await message.reply("🔍 **Analyzing Link...**")
     
     try:
         if await is_banned(message.from_user.id):
-            return await status_msg.edit("🚫 **Access Denied:** You have been banned from using this bot.")
-        
-        text = message.text or message.caption
-        if not text:
-            return await status_msg.edit("❌ **Error:** No readable text found in your message.")
+            return await status_msg.edit("🚫 Access Denied.")
             
-        url = extract_and_convert_mega_link(text)
+        url = extract_and_convert_mega_link(message.text or message.caption)
         if not url:
-            return await status_msg.edit("❌ **Invalid Link format.** Please ensure the link contains the decryption key (the part after the #).")
+            return await status_msg.edit("❌ Invalid Link format.")
             
-        await status_msg.edit("⏳ **Bypassing Mega Limits...** Authenticating anonymous session.")
         user = await get_user(message.from_user.id)
+        file_links = []
         
-        task_id = str(uuid.uuid4())
-        task_dir = os.path.join(DOWNLOAD_DIR, task_id)
-        os.makedirs(task_dir, exist_ok=True)
-        
-        await status_msg.edit("📥 **Downloading Assets...**\n\nFull Folder/File extraction is currently active. Large requests may take several minutes.")
-        
-        cmd = f"megadl '{url}' --path '{task_dir}'"
-        process = await asyncio.create_subprocess_shell(
-            cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        stdout, stderr = await process.communicate()
-        
-        if process.returncode != 0:
-            error_msg = stderr.decode() or stdout.decode()
-            raise Exception(f"Megatools Extraction Failure: {error_msg.strip()}")
+        # --- FOLDER DETECTION & ONE-BY-ONE QUEUE ---
+        if "#F!" in url:
+            await status_msg.edit("📂 **Folder Detected!** Fetching file list...")
             
-        await status_msg.edit("📂 **Download Complete!** Beginning Telegram upload sequence...")
-        
-        uploaded_count = 0
-        for root, dirs, files in os.walk(task_dir):
-            for file in files:
-                full_path = os.path.join(root, file)
-                await process_file(client, message, full_path, status_msg, user)
-                uploaded_count += 1
+            cmd = f"megals -e '{url}'"
+            process = await asyncio.create_subprocess_shell(
+                cmd, 
+                stdout=asyncio.subprocess.PIPE, 
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await process.communicate()
+            
+            if process.returncode != 0:
+                raise Exception(f"Failed to read folder contents. It might be empty or locked.")
                 
+            # Filter the output to ONLY grab actual files, ignoring subfolder containers
+            output = stdout.decode().strip().split('\n')
+            for line in output:
+                link = line.strip()
+                # megals exports individual files with #!
+                if "https://mega.nz/" in link and "#!" in link:
+                    file_links.append(link)
+            
+            if not file_links:
+                return await status_msg.edit("⚠️ **Folder is empty or couldn't be read.**")
+                
+            await status_msg.edit(f"📋 **Found {len(file_links)} files!** Starting sequential download process...")
+        else:
+            file_links = [url]
+            await status_msg.edit("📥 **Single File Detected.** Starting download...")
+
+        # --- SEQUENTIAL PROCESS (DOWNLOAD 1 -> UPLOAD 1 -> DELETE 1) ---
+        uploaded_count = 0
+        
+        for index, file_link in enumerate(file_links, start=1):
+            task_dir = os.path.join(DOWNLOAD_DIR, str(uuid.uuid4()))
+            os.makedirs(task_dir, exist_ok=True)
+            
+            try:
+                await status_msg.edit(f"⏳ **Processing File {index} of {len(file_links)}...**\n\n📥 _Downloading from Mega..._")
+                
+                dl_cmd = f"megadl '{file_link}' --path '{task_dir}'"
+                dl_process = await asyncio.create_subprocess_shell(
+                    dl_cmd, 
+                    stdout=asyncio.subprocess.PIPE, 
+                    stderr=asyncio.subprocess.PIPE
+                )
+                await dl_process.communicate()
+                
+                if dl_process.returncode != 0:
+                    logger.error(f"Skipping {file_link} - Download failed.")
+                    continue 
+                    
+                for root, dirs, files in os.walk(task_dir):
+                    for file in files:
+                        full_path = os.path.join(root, file)
+                        await process_file(client, message, full_path, status_msg, user)
+                        uploaded_count += 1
+                        
+            except Exception as file_error:
+                logger.error(f"Error on file {index}: {str(file_error)}")
+            finally:
+                # Deletes the file immediately to save server storage
+                if os.path.exists(task_dir):
+                    shutil.rmtree(task_dir, ignore_errors=True)
+
         if uploaded_count == 0:
-            await status_msg.edit("⚠️ **Warning:** Extraction finished, but the folder appeared to be empty or corrupted.")
+            await status_msg.edit("⚠️ **Process finished, but no files were successfully uploaded.**")
         else:
             await status_msg.delete()
-            await message.reply("✅ **Batch Process Completed Successfully!**")
+            await message.reply(f"✅ **Batch Process Complete!**\nSuccessfully downloaded, transcoded, and uploaded **{uploaded_count}** files.")
             
     except Exception as e:
-        logger.error(f"Mega Error: {str(e)}")
-        await status_msg.edit(f"❌ **Fatal Processing Error:**\n\n`{str(e)}`")
-        
-    finally:
-        if 'task_dir' in locals() and os.path.exists(task_dir):
-            shutil.rmtree(task_dir, ignore_errors=True)
+        await status_msg.edit(f"❌ **Error:** `{str(e)}`")
+
 
 # --- WEB SERVER (RENDER REQUIREMENT) ---
 
