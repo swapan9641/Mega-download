@@ -3,13 +3,15 @@ import sys
 import asyncio
 import logging
 import re
+import uuid
+import shutil
 from aiohttp import web
 from pyrogram import Client, filters, idle
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from mega import Mega
 from config import *
 from database import *
 from video_utils import convert_video
+# (Remove the 'from mega import Mega' and 'm = mega.login()' lines completely)
 
 # Professional Logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -182,37 +184,59 @@ async def handle_mega(client, message):
     
     url = url_match.group(1)
     
-    # 2. Check if the link has a decryption key
-    if "#" not in url:
-        return await message.reply("❌ **Url key missing!**\nYour Mega link must include the decryption key (the part after the `#`).\n\nExample: `https://mega.nz/file/xxxxx#yyyyyyy`")
-
+    # 2. Convert new Mega URL formats to the classic format for Megatools compatibility
+    if "/folder/" in url:
+        url = url.replace("/folder/", "/#F!").replace("#", "!")
+    elif "/file/" in url:
+        url = url.replace("/file/", "/#!").replace("#", "!")
+        
     status_msg = await message.reply("⏳ Connecting to Mega...")
     user = await get_user(message.from_user.id)
     
+    # 3. Create a unique temporary folder for this specific download task
+    task_id = str(uuid.uuid4())
+    task_dir = os.path.join(DOWNLOAD_DIR, task_id)
+    os.makedirs(task_dir, exist_ok=True)
+    
     try:
-        await status_msg.edit("📥 Downloading from Mega to Server...")
+        await status_msg.edit("📥 Downloading from Mega... (Folder Support Enabled)")
         
-        # Run synchronous mega download in a thread pool so bot doesn't freeze
-        loop = asyncio.get_event_loop()
-        file_path = await loop.run_in_executor(None, m.download_url, url, DOWNLOAD_DIR)
+        # 4. Use megatools to download the file/folder
+        cmd = f"megadl '{url}' --path '{task_dir}'"
+        process = await asyncio.create_subprocess_shell(
+            cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await process.communicate()
         
-        # If it's a single file (returns string)
-        if isinstance(file_path, str):
-            await process_file(client, message, file_path, status_msg, user)
-            await status_msg.delete()
+        if process.returncode != 0:
+            error_msg = stderr.decode() or stdout.decode()
+            raise Exception(f"Megatools error: {error_msg.strip()}")
             
-        # If it's a folder
+        await status_msg.edit("📂 Processing and uploading downloaded files...")
+        
+        # 5. Walk through the unique task directory and upload every file
+        uploaded_count = 0
+        for root, dirs, files in os.walk(task_dir):
+            for file in files:
+                full_path = os.path.join(root, file)
+                await process_file(client, message, full_path, status_msg, user)
+                uploaded_count += 1
+                
+        if uploaded_count == 0:
+            await status_msg.edit("⚠️ Download completed, but no files were found.")
         else:
-            await status_msg.edit("⚠️ Folder detected. Processing downloaded contents...")
-            for root, dirs, files in os.walk(DOWNLOAD_DIR):
-                for file in files:
-                    full_path = os.path.join(root, file)
-                    await process_file(client, message, full_path, status_msg, user)
             await status_msg.delete()
             
     except Exception as e:
         logger.error(f"Mega Error: {str(e)}")
         await status_msg.edit(f"❌ Error processing link:\n`{str(e)}`")
+        
+    finally:
+        # 6. Always clean up the temporary folder when done
+        if os.path.exists(task_dir):
+            shutil.rmtree(task_dir, ignore_errors=True)
 
 
 # --- WEB SERVER FOR CLOUD HEALTH CHECKS ---
