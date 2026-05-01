@@ -73,7 +73,7 @@ async def settings_cb(client, callback_query):
 
 @app.on_callback_query(filters.regex(r"^q_"))
 async def set_quality(client, callback_query):
-    new_quality = callback_query.data.split("_") # Fixed bug here
+    new_quality = callback_query.data.split("_")
     await update_settings(callback_query.from_user.id, "quality", new_quality)
     await callback_query.answer(f"Quality set to {new_quality}", show_alert=True)
     await settings_cb(client, callback_query)
@@ -87,7 +87,7 @@ async def list_users(client, message):
     with open(file_path, "w") as f:
         f.write(f"Total Users: {len(users)}\n\n")
         for u in users:
-            f.write(f"ID: {u['_id']} | @{u['username']} | Banned: {u['is_banned']}\n")
+            f.write(f"ID: {u['_id']} | @{u.get('username', 'Unknown')} | Banned: {u.get('is_banned', False)}\n")
     await message.reply_document(file_path)
     if os.path.exists(file_path):
         os.remove(file_path)
@@ -95,19 +95,19 @@ async def list_users(client, message):
 @app.on_message(filters.command("ban") & filters.user(ADMINS))
 async def ban_cmd(client, message):
     try:
-        user_id = int(message.command) # Fixed bug here
+        user_id = int(message.command)
         await ban_user(user_id, True)
         await message.reply(f"✅ User `{user_id}` banned.")
-    except IndexError:
+    except (IndexError, ValueError):
         await message.reply("Usage: `/ban [user_id]`")
 
 @app.on_message(filters.command("unban") & filters.user(ADMINS))
 async def unban_cmd(client, message):
     try:
-        user_id = int(message.command) # Fixed bug here
+        user_id = int(message.command)
         await ban_user(user_id, False)
         await message.reply(f"✅ User `{user_id}` unbanned.")
-    except IndexError:
+    except (IndexError, ValueError):
         await message.reply("Usage: `/unban [user_id]`")
 
 @app.on_message(filters.command("restart") & filters.user(ADMINS))
@@ -117,12 +117,11 @@ async def restart_bot(client, message):
 
 # --- TARGET CHANNEL SETUP ---
 
-@app.on_message(filters.text & filters.private & ~filters.regex(r"mega\.nz") & ~filters.command(["start", "users", "ban", "unban", "restart"]))
+@app.on_message(filters.text & filters.private & ~filters.regex(r"(?i)mega\.nz") & ~filters.command(["start", "users", "ban", "unban", "restart"]))
 async def set_target_channel(client, message):
     if message.text.startswith("-100"):
         try:
             channel_id = int(message.text)
-            # Verify bot can post
             test_msg = await client.send_message(channel_id, "Test connection...")
             await test_msg.delete()
             
@@ -138,25 +137,22 @@ async def process_file(client, message, file_path, status_msg, user):
     target_channel = user.get("target_channel")
     upload_path = file_path
 
-    # Video Transcoding Logic
     if file_path.lower().endswith(('.mp4', '.mkv', '.avi', '.webm')):
         await status_msg.edit(f"⚙️ Transcoding video to **{quality}** via FFmpeg...")
         converted_path = os.path.join(DOWNLOAD_DIR, f"conv_{os.path.basename(file_path)}")
         res = await convert_video(file_path, converted_path, quality)
         if res:
-            os.remove(file_path) # Remove original
+            os.remove(file_path)
             upload_path = converted_path
 
     await status_msg.edit(f"📤 Uploading `{os.path.basename(upload_path)}` to Telegram...")
     
-    # Upload to Dump Channel
     dump_msg = await client.send_document(
         chat_id=DUMP_CHANNEL, 
         document=upload_path,
         caption=f"📁 **File:** `{os.path.basename(upload_path)}`\n👤 **User:** `{message.from_user.id}`{CREDIT_TEXT}"
     )
     
-    # Forward to Target Channel if set, otherwise to User
     if target_channel:
         try:
             await dump_msg.copy(chat_id=target_channel)
@@ -167,31 +163,27 @@ async def process_file(client, message, file_path, status_msg, user):
         await dump_msg.copy(chat_id=message.chat.id)
 
     if os.path.exists(upload_path):
-        os.remove(upload_path) # Cleanup
+        os.remove(upload_path)
 
 @app.on_message(filters.regex(r"(?i)mega\.nz") & filters.private)
 async def handle_mega(client, message):
-    # 1. REPLY IMMEDIATELY so you know the bot isn't dead
     status_msg = await message.reply("🔍 Link received! Checking details...")
     
     try:
-        # 2. Now check the database (if this hangs, we will know!)
         if await is_banned(message.from_user.id):
             return await status_msg.edit("🚫 You are banned from using this bot.")
         
-        # 3. Handle both normal texts and photo captions safely
         text = message.text or message.caption
         if not text:
             return await status_msg.edit("❌ No text found in the message.")
             
-        # 4. Extract ONLY the Mega URL (Case Insensitive)
         url_match = re.search(r"(https?://(?:www\.)?mega\.nz/[^\s]+)", text, re.IGNORECASE)
         if not url_match:
             return await status_msg.edit("❌ Could not find a valid Mega link. Make sure it includes https://")
         
         url = url_match.group(1)
         
-        # 5. Convert new Mega URL formats to classic format
+        # Safe String parsing to avoid the 'list' error
         if "/folder/" in url and "#" in url:
             parts = url.split("#")
             url = f"{parts.replace('/folder/', '/#F!')}!{parts}"
@@ -202,14 +194,12 @@ async def handle_mega(client, message):
         await status_msg.edit("⏳ Connecting to Mega...")
         user = await get_user(message.from_user.id)
         
-        # 6. Create a unique temporary folder
         task_id = str(uuid.uuid4())
         task_dir = os.path.join(DOWNLOAD_DIR, task_id)
         os.makedirs(task_dir, exist_ok=True)
         
         await status_msg.edit("📥 Downloading from Mega... (Folder Support Enabled)")
         
-        # 7. Use megatools to download
         cmd = f"megadl '{url}' --path '{task_dir}'"
         process = await asyncio.create_subprocess_shell(
             cmd,
@@ -224,7 +214,6 @@ async def handle_mega(client, message):
             
         await status_msg.edit("📂 Processing and uploading downloaded files...")
         
-        # 8. Walk through and upload
         uploaded_count = 0
         for root, dirs, files in os.walk(task_dir):
             for file in files:
@@ -243,10 +232,8 @@ async def handle_mega(client, message):
         await status_msg.edit(f"❌ Error processing link:\n`{str(e)}`")
         
     finally:
-        # 9. Clean up
         if 'task_dir' in locals() and os.path.exists(task_dir):
             shutil.rmtree(task_dir, ignore_errors=True)
-
 
 # --- WEB SERVER FOR CLOUD HEALTH CHECKS ---
 
@@ -262,27 +249,17 @@ async def start_webserver():
     await site.start()
     logger.info(f"🌐 Web server started on port {PORT}")
 
-
 # --- STARTUP LOGIC ---
 
 async def main():
-    # Start web server
     await start_webserver()
-    
-    # Start Pyrogram bot
     await app.start()
     logger.info("🤖 Bot Started!")
-    
-    # Keep the bot running
     await idle()
-    
-    # Stop the bot gracefully
     await app.stop()
 
 if __name__ == "__main__":
-    # Fix event loop for Windows/Linux compatibility
     if sys.platform == 'win32':
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    
     loop = asyncio.get_event_loop()
     loop.run_until_complete(main())
