@@ -12,7 +12,8 @@ async def add_user(user_id, username):
             "username": username, 
             "is_banned": False,
             "target_channel": None,
-            "quality": "360p"
+            "quality": "360p",
+            "state": None # Used for the /set_channel conversation
         })
 
 async def get_all_users():
