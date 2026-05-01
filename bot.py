@@ -2,6 +2,7 @@ import os
 import sys
 import asyncio
 import logging
+import re
 from aiohttp import web
 from pyrogram import Client, filters, idle
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -174,7 +175,17 @@ async def handle_mega(client, message):
     if await is_banned(message.from_user.id):
         return
     
-    url = message.text
+    # 1. Extract ONLY the Mega URL from the message
+    url_match = re.search(r"(https?://(?:www\.)?mega\.nz/[^\s]+)", message.text)
+    if not url_match:
+        return await message.reply("❌ Could not find a valid Mega link in your message.")
+    
+    url = url_match.group(1)
+    
+    # 2. Check if the link has a decryption key
+    if "#" not in url:
+        return await message.reply("❌ **Url key missing!**\nYour Mega link must include the decryption key (the part after the `#`).\n\nExample: `https://mega.nz/file/xxxxx#yyyyyyy`")
+
     status_msg = await message.reply("⏳ Connecting to Mega...")
     user = await get_user(message.from_user.id)
     
@@ -192,7 +203,7 @@ async def handle_mega(client, message):
             
         # If it's a folder
         else:
-            await status_msg.edit("⚠️ Folder detected. Standard `mega.py` downloads folders as zip or bulk. Processing downloaded contents...")
+            await status_msg.edit("⚠️ Folder detected. Processing downloaded contents...")
             for root, dirs, files in os.walk(DOWNLOAD_DIR):
                 for file in files:
                     full_path = os.path.join(root, file)
