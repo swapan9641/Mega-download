@@ -2,7 +2,6 @@ import os
 import sys
 import asyncio
 import logging
-import re
 import uuid
 import shutil
 from aiohttp import web
@@ -11,72 +10,101 @@ from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from config import *
 from database import *
 from video_utils import convert_video
+from mega_parser import extract_and_convert_mega_link
 
-# Professional Logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 logging.getLogger("pyrogram").setLevel(logging.WARNING)
 
 app = Client("MegaBot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# --- USER COMMANDS ---
+# --- USER COMMANDS & CALLBACKS ---
+
+def get_start_text(first_name):
+    return (f"✨ **Welcome to the Mega Downloader Bot, {first_name}!** ✨\n\n"
+            f"I am an advanced cloud-extraction bot designed to download high-volume files and complete folders directly from **Mega.nz**.\n\n"
+            f"**💡 How to use me:**\n"
+            f"Simply copy and paste any Mega link into this chat. I will automatically decrypt the link, extract the contents, process any videos to your preferred quality, and upload them to Telegram.\n\n"
+            f"👇 **Use the buttons below to configure your preferences.**")
+
+def get_start_buttons():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📖 Help & Commands", callback_data="help")],
+        [InlineKeyboardButton("⚙️ Settings & Quality", callback_data="settings")]
+    ])
 
 @app.on_message(filters.command("start") & filters.private)
 async def start_cmd(client, message):
     await add_user(message.from_user.id, message.from_user.username)
     if await is_banned(message.from_user.id):
-        return await message.reply("🚫 You are banned from using this bot.")
+        return await message.reply("🚫 **Access Denied:** You have been banned from using this bot.")
+    await message.reply(get_start_text(message.from_user.first_name), reply_markup=get_start_buttons())
 
-    text = (f"✨ **Welcome {message.from_user.first_name}!** ✨\n\n"
-            f"I am a powerful Mega.nz Downloader Bot. Send me a Mega file or folder link to start.\n\n"
-            f"🔹 Default Video Quality: **360p**\n"
-            f"🔹 Target Channel Support\n"
-            f"🔹 Folder & Single File Extraction")
-    
-    buttons = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🛠 Help & Commands", callback_data="help")],
-        [InlineKeyboardButton("⚙️ Settings", callback_data="settings")]
-    ])
-    await message.reply(text, reply_markup=buttons)
+@app.on_callback_query(filters.regex("^start$"))
+async def start_cb(client, callback_query):
+    # This fixes the broken "Back" button!
+    await callback_query.message.edit_text(
+        get_start_text(callback_query.from_user.first_name), 
+        reply_markup=get_start_buttons()
+    )
 
-@app.on_callback_query(filters.regex("help"))
+@app.on_callback_query(filters.regex("^help$"))
 async def help_cb(client, callback_query):
-    text = ("**📖 Bot Help & Commands**\n\n"
-            "**User Commands:**\n"
-            "• `/start` - Start the bot\n"
-            "• Send any `mega.nz` link to download.\n\n"
-            "**Admin Commands:**\n"
-            "• `/users` - Get list of all users\n"
-            "• `/ban [user_id]` - Ban a user\n"
-            "• `/unban [user_id]` - Unban a user\n"
-            "• `/restart` - Restart the bot server\n\n"
-            "**Features:**\n"
-            "Use the settings menu to bind a custom target channel where your files will be forwarded.")
-    await callback_query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(
-        [[InlineKeyboardButton("🔙 Back", callback_data="start")]]))
+    text = ("**📖 Comprehensive Help Guide**\n\n"
+            "**📥 Downloading Files:**\n"
+            "Paste any valid `mega.nz/file/` or `mega.nz/folder/` link. The bot supports recursive folder downloading.\n\n"
+            "**⚙️ User Commands:**\n"
+            "• `/start` - Reboot the bot interface.\n"
+            "• `/set_channel [ID]` - Route downloads to a specific channel.\n\n"
+            "**🛠 Admin Commands:**\n"
+            "• `/users` - Export a text file of all database users.\n"
+            "• `/ban [ID]` - Restrict a user.\n"
+            "• `/unban [ID]` - Restore user access.\n"
+            "• `/restart` - Force reboot the server application.")
+    await callback_query.message.edit_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Main Menu", callback_data="start")]]))
 
-@app.on_callback_query(filters.regex("settings"))
+@app.on_callback_query(filters.regex("^settings$"))
 async def settings_cb(client, callback_query):
     user = await get_user(callback_query.from_user.id)
     quality = user.get("quality", "360p")
     target = user.get("target_channel", "Not Set")
     
-    text = f"**⚙️ User Settings**\n\nCurrent Quality: `{quality}`\nTarget Channel: `{target}`\n\n_To set a target channel, add me as admin to your channel and send me the channel ID._"
+    text = (f"**⚙️ Control Panel & Preferences**\n\n"
+            f"**🎥 Current Video Quality:** `{quality}`\n"
+            f"**🎯 Target Upload Channel:** `{target}`\n\n"
+            f"_Note: If you want files sent directly to a group or channel, add me as an Admin there and use the command `/set_channel` followed by the chat ID._")
     
     buttons = InlineKeyboardMarkup([
-        [InlineKeyboardButton("360p", callback_data="q_360p"),
-         InlineKeyboardButton("480p", callback_data="q_480p"),
-         InlineKeyboardButton("720p", callback_data="q_720p")],
-        [InlineKeyboardButton("🔙 Back", callback_data="start")]
+        [InlineKeyboardButton("📺 Set 360p", callback_data="q_360p"), InlineKeyboardButton("📺 Set 480p", callback_data="q_480p")],
+        [InlineKeyboardButton("📺 Set 720p", callback_data="q_720p"), InlineKeyboardButton("📺 Set 1080p", callback_data="q_1080p")],
+        [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="start")]
     ])
     await callback_query.message.edit_text(text, reply_markup=buttons)
 
 @app.on_callback_query(filters.regex(r"^q_"))
-async def set_quality(client, callback_query):
+async def set_quality_cb(client, callback_query):
     new_quality = callback_query.data.split("_")
     await update_settings(callback_query.from_user.id, "quality", new_quality)
-    await callback_query.answer(f"Quality set to {new_quality}", show_alert=True)
+    await callback_query.answer(f"✅ Default video quality updated to {new_quality}!", show_alert=True)
     await settings_cb(client, callback_query)
+
+# --- CHANNEL SETTINGS ---
+
+@app.on_message(filters.command("set_channel") & filters.private)
+async def set_channel_cmd(client, message):
+    if len(message.command) < 2:
+        return await message.reply("⚠️ **Incorrect Usage**\n\nPlease provide the ID of the channel or group you want to route files to.\n\n**Example:** `/set_channel -1001234567890`")
+    
+    try:
+        channel_id = int(message.command)
+        # Test the connection to ensure the bot has permission
+        test_msg = await client.send_message(channel_id, "🔗 **Connection Established:** Mega Bot is now linked to this channel.")
+        await update_settings(message.from_user.id, "target_channel", channel_id)
+        await message.reply(f"✅ **Target Channel Configured!**\n\nAll future files will be uploaded directly to `{channel_id}`.\n_Make sure I remain an admin, otherwise uploads will fail._")
+    except ValueError:
+        await message.reply("❌ **Error:** The channel ID must be a number (e.g., -100...)")
+    except Exception as e:
+        await message.reply(f"❌ **Connection Failed:**\nI cannot send messages to that channel. Make sure I am added as an Admin.\n\n`Error Details: {e}`")
 
 # --- ADMIN COMMANDS ---
 
@@ -85,52 +113,36 @@ async def list_users(client, message):
     users = await get_all_users()
     file_path = "users_list.txt"
     with open(file_path, "w") as f:
-        f.write(f"Total Users: {len(users)}\n\n")
+        f.write(f"--- Mega Bot Database Export ---\nTotal Active Users: {len(users)}\n\n")
         for u in users:
-            f.write(f"ID: {u['_id']} | @{u.get('username', 'Unknown')} | Banned: {u.get('is_banned', False)}\n")
-    await message.reply_document(file_path)
-    if os.path.exists(file_path):
-        os.remove(file_path)
+            f.write(f"ID: {u['_id']} | Username: @{u.get('username', 'Unknown')} | Banned Status: {u.get('is_banned', False)}\n")
+    await message.reply_document(file_path, caption="📄 **Database Export Complete.**")
+    os.remove(file_path)
 
 @app.on_message(filters.command("ban") & filters.user(ADMINS))
 async def ban_cmd(client, message):
     try:
         user_id = int(message.command)
         await ban_user(user_id, True)
-        await message.reply(f"✅ User `{user_id}` banned.")
+        await message.reply(f"✅ **Action Successful:** User `{user_id}` has been permanently banned.")
     except (IndexError, ValueError):
-        await message.reply("Usage: `/ban [user_id]`")
+        await message.reply("⚠️ **Usage:** `/ban [user_id]`")
 
 @app.on_message(filters.command("unban") & filters.user(ADMINS))
 async def unban_cmd(client, message):
     try:
         user_id = int(message.command)
         await ban_user(user_id, False)
-        await message.reply(f"✅ User `{user_id}` unbanned.")
+        await message.reply(f"✅ **Action Successful:** User `{user_id}` has had their access restored.")
     except (IndexError, ValueError):
-        await message.reply("Usage: `/unban [user_id]`")
+        await message.reply("⚠️ **Usage:** `/unban [user_id]`")
 
 @app.on_message(filters.command("restart") & filters.user(ADMINS))
 async def restart_bot(client, message):
-    await message.reply("🔄 Restarting bot... Please wait.")
+    await message.reply("🔄 **Initiating Server Reboot...** Please wait 10-15 seconds for systems to come back online.")
     os.execl(sys.executable, sys.executable, *sys.argv)
 
-# --- TARGET CHANNEL SETUP ---
-
-@app.on_message(filters.text & filters.private & ~filters.regex(r"(?i)mega\.nz") & ~filters.command(["start", "users", "ban", "unban", "restart"]))
-async def set_target_channel(client, message):
-    if message.text.startswith("-100"):
-        try:
-            channel_id = int(message.text)
-            test_msg = await client.send_message(channel_id, "Test connection...")
-            await test_msg.delete()
-            
-            await update_settings(message.from_user.id, "target_channel", channel_id)
-            await message.reply("✅ Target channel configured successfully!")
-        except Exception as e:
-            await message.reply(f"❌ Could not access channel. Make sure I am an admin. Error: {e}")
-
-# --- MAIN DOWNLOAD LOGIC ---
+# --- MAIN MEGA LOGIC ---
 
 async def process_file(client, message, file_path, status_msg, user):
     quality = user.get("quality", "360p")
@@ -138,26 +150,28 @@ async def process_file(client, message, file_path, status_msg, user):
     upload_path = file_path
 
     if file_path.lower().endswith(('.mp4', '.mkv', '.avi', '.webm')):
-        await status_msg.edit(f"⚙️ Transcoding video to **{quality}** via FFmpeg...")
+        await status_msg.edit(f"⚙️ **Transcoding Video Engine Active**\n\nProcessing media down to **{quality}** using hardware FFmpeg. Please be patient, as this takes time depending on the file size...")
         converted_path = os.path.join(DOWNLOAD_DIR, f"conv_{os.path.basename(file_path)}")
         res = await convert_video(file_path, converted_path, quality)
         if res:
             os.remove(file_path)
             upload_path = converted_path
 
-    await status_msg.edit(f"📤 Uploading `{os.path.basename(upload_path)}` to Telegram...")
+    await status_msg.edit(f"📤 **Upload in Progress...**\n\nPushing `{os.path.basename(upload_path)}` directly to Telegram servers.")
     
+    # Secure Dump Upload
     dump_msg = await client.send_document(
         chat_id=DUMP_CHANNEL, 
         document=upload_path,
-        caption=f"📁 **File:** `{os.path.basename(upload_path)}`\n👤 **User:** `{message.from_user.id}`{CREDIT_TEXT}"
+        caption=f"📁 **File Data:** `{os.path.basename(upload_path)}`\n👤 **Requested By:** `{message.from_user.id}`{CREDIT_TEXT}"
     )
     
+    # Route to user or target
     if target_channel:
         try:
             await dump_msg.copy(chat_id=target_channel)
         except Exception as e:
-            await message.reply(f"⚠️ Failed to forward to target channel: {e}")
+            await message.reply(f"⚠️ **Warning:** Could not route to your target channel. Sending here instead.\n`{e}`")
             await dump_msg.copy(chat_id=message.chat.id)
     else:
         await dump_msg.copy(chat_id=message.chat.id)
@@ -167,38 +181,28 @@ async def process_file(client, message, file_path, status_msg, user):
 
 @app.on_message(filters.regex(r"(?i)mega\.nz") & filters.private)
 async def handle_mega(client, message):
-    status_msg = await message.reply("🔍 Link received! Checking details...")
+    status_msg = await message.reply("🔍 **Analyzing Link...** Extracting secure keys and verifying format.")
     
     try:
         if await is_banned(message.from_user.id):
-            return await status_msg.edit("🚫 You are banned from using this bot.")
+            return await status_msg.edit("🚫 **Access Denied:** You have been banned from using this bot.")
         
         text = message.text or message.caption
         if not text:
-            return await status_msg.edit("❌ No text found in the message.")
+            return await status_msg.edit("❌ **Error:** No readable text found in your message.")
             
-        url_match = re.search(r"(https?://(?:www\.)?mega\.nz/[^\s]+)", text, re.IGNORECASE)
-        if not url_match:
-            return await status_msg.edit("❌ Could not find a valid Mega link. Make sure it includes https://")
-        
-        url = url_match.group(1)
-        
-        # Safe String parsing to avoid the 'list' error
-        if "/folder/" in url and "#" in url:
-            parts = url.split("#")
-            url = f"{parts.replace('/folder/', '/#F!')}!{parts}"
-        elif "/file/" in url and "#" in url:
-            parts = url.split("#")
-            url = f"{parts.replace('/file/', '/#!')}!{parts}"
+        url = extract_and_convert_mega_link(text)
+        if not url:
+            return await status_msg.edit("❌ **Invalid Link format.** Please ensure the link contains the decryption key (the part after the #).")
             
-        await status_msg.edit("⏳ Connecting to Mega...")
+        await status_msg.edit("⏳ **Bypassing Mega Limits...** Authenticating anonymous session.")
         user = await get_user(message.from_user.id)
         
         task_id = str(uuid.uuid4())
         task_dir = os.path.join(DOWNLOAD_DIR, task_id)
         os.makedirs(task_dir, exist_ok=True)
         
-        await status_msg.edit("📥 Downloading from Mega... (Folder Support Enabled)")
+        await status_msg.edit("📥 **Downloading Assets...**\n\nFull Folder/File extraction is currently active. Large requests may take several minutes.")
         
         cmd = f"megadl '{url}' --path '{task_dir}'"
         process = await asyncio.create_subprocess_shell(
@@ -210,9 +214,9 @@ async def handle_mega(client, message):
         
         if process.returncode != 0:
             error_msg = stderr.decode() or stdout.decode()
-            raise Exception(f"Megatools error: {error_msg.strip()}")
+            raise Exception(f"Megatools Extraction Failure: {error_msg.strip()}")
             
-        await status_msg.edit("📂 Processing and uploading downloaded files...")
+        await status_msg.edit("📂 **Download Complete!** Beginning Telegram upload sequence...")
         
         uploaded_count = 0
         for root, dirs, files in os.walk(task_dir):
@@ -222,23 +226,23 @@ async def handle_mega(client, message):
                 uploaded_count += 1
                 
         if uploaded_count == 0:
-            debug_info = stderr.decode() or stdout.decode()
-            await status_msg.edit(f"⚠️ Download completed, but no files were found.\n\n**Debug Log:**\n`{debug_info[:800]}`")
+            await status_msg.edit("⚠️ **Warning:** Extraction finished, but the folder appeared to be empty or corrupted.")
         else:
             await status_msg.delete()
+            await message.reply("✅ **Batch Process Completed Successfully!**")
             
     except Exception as e:
         logger.error(f"Mega Error: {str(e)}")
-        await status_msg.edit(f"❌ Error processing link:\n`{str(e)}`")
+        await status_msg.edit(f"❌ **Fatal Processing Error:**\n\n`{str(e)}`")
         
     finally:
         if 'task_dir' in locals() and os.path.exists(task_dir):
             shutil.rmtree(task_dir, ignore_errors=True)
 
-# --- WEB SERVER FOR CLOUD HEALTH CHECKS ---
+# --- WEB SERVER (RENDER REQUIREMENT) ---
 
 async def web_handler(request):
-    return web.Response(text="Mega Bot is running successfully!")
+    return web.Response(text="Mega Bot Service is Active and Healthy!")
 
 async def start_webserver():
     web_app = web.Application()
@@ -247,14 +251,14 @@ async def start_webserver():
     await runner.setup()
     site = web.TCPSite(runner, '0.0.0.0', PORT)
     await site.start()
-    logger.info(f"🌐 Web server started on port {PORT}")
+    logger.info(f"🌐 Cloud Health-Check Web Server initialized on Port {PORT}")
 
-# --- STARTUP LOGIC ---
+# --- STARTUP SEQUENCE ---
 
 async def main():
     await start_webserver()
     await app.start()
-    logger.info("🤖 Bot Started!")
+    logger.info("🤖 Primary Bot Modules Online!")
     await idle()
     await app.stop()
 
