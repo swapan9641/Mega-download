@@ -4,13 +4,15 @@ import asyncio
 import logging
 import uuid
 import shutil
+import re
 from aiohttp import web
 from pyrogram import Client, filters, idle
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from mega import Mega
+
 from config import *
 from database import *
 from video_utils import convert_video
-from mega_parser import extract_and_convert_mega_link
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -18,49 +20,64 @@ logging.getLogger("pyrogram").setLevel(logging.WARNING)
 
 app = Client("MegaBot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# --- USER COMMANDS & CALLBACKS ---
+# Initialize Mega Client
+mega_client = Mega()
+mega_api = mega_client.login()
+
+# ==========================================
+# 🌟 USER INTERFACE & MENUS
+# ==========================================
 
 def get_start_text(first_name):
-    return (f"✨ **Welcome to the Mega Downloader Bot, {first_name}!** ✨\n\n"
-            f"I am an advanced cloud-extraction bot designed to download high-volume files and complete folders directly from **Mega.nz**.\n\n"
-            f"**💡 How to use me:**\n"
-            f"Simply copy and paste any Mega link into this chat. I will automatically decrypt the link, extract the contents, process any videos to your preferred quality, and upload them to Telegram.\n\n"
-            f"👇 **Use the buttons below to configure your preferences.**")
+    return (f"✨ **Hello {first_name}, Welcome to the Ultimate Mega Downloader!** ✨\n\n"
+            f"I am an advanced cloud-extraction AI. I can bypass limits and download massive files and complete folders directly from **Mega.nz**.\n\n"
+            f"**💡 How I Work:**\n"
+            f"Just send me a Mega link. If it's a huge folder, I will download and upload the files **one by one** so my servers never crash, ensuring you get every single file flawlessly!\n\n"
+            f"👇 **Explore my features below:**")
 
 def get_start_buttons():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📖 Help & Commands", callback_data="help")],
-        [InlineKeyboardButton("⚙️ Settings & Quality", callback_data="settings")]
+        [InlineKeyboardButton("📖 Read User Guide", callback_data="help")],
+        [InlineKeyboardButton("⚙️ Settings & Quality", callback_data="settings"), InlineKeyboardButton("🎧 Support", callback_data="support")]
     ])
 
 @app.on_message(filters.command("start") & filters.private)
 async def start_cmd(client, message):
     await add_user(message.from_user.id, message.from_user.username)
+    # Clear any pending conversational states
+    await update_settings(message.from_user.id, "state", None)
+    
     if await is_banned(message.from_user.id):
-        return await message.reply("🚫 **Access Denied:** You have been banned from using this bot.")
+        return await message.reply("🚫 **Access Denied:** Your account has been suspended by the administrators.")
     await message.reply(get_start_text(message.from_user.first_name), reply_markup=get_start_buttons())
 
 @app.on_callback_query(filters.regex("^start$"))
 async def start_cb(client, callback_query):
-    # This fixes the broken "Back" button!
-    await callback_query.message.edit_text(
-        get_start_text(callback_query.from_user.first_name), 
-        reply_markup=get_start_buttons()
-    )
+    await update_settings(callback_query.from_user.id, "state", None)
+    await callback_query.message.edit_text(get_start_text(callback_query.from_user.first_name), reply_markup=get_start_buttons())
 
 @app.on_callback_query(filters.regex("^help$"))
 async def help_cb(client, callback_query):
-    text = ("**📖 Comprehensive Help Guide**\n\n"
-            "**📥 Downloading Files:**\n"
-            "Paste any valid `mega.nz/file/` or `mega.nz/folder/` link. The bot supports recursive folder downloading.\n\n"
-            "**⚙️ User Commands:**\n"
-            "• `/start` - Reboot the bot interface.\n"
-            "• `/set_channel [ID]` - Route downloads to a specific channel.\n\n"
-            "**🛠 Admin Commands:**\n"
-            "• `/users` - Export a text file of all database users.\n"
-            "• `/ban [ID]` - Restrict a user.\n"
-            "• `/unban [ID]` - Restore user access.\n"
-            "• `/restart` - Force reboot the server application.")
+    text = ("**📖 Mega Bot User Guide**\n\n"
+            "**📥 How to Download:**\n"
+            "Copy any `mega.nz/file/` or `mega.nz/folder/` link and paste it in this chat. I will handle the encryption and extraction automatically.\n\n"
+            "**⚙️ Available Commands:**\n"
+            "• `/start` - Refresh the bot and view the main menu.\n"
+            "• `/set_channel` - Step-by-step guide to route files to your own channel.\n"
+            "• `/support` - Get help or contact admins.\n\n"
+            "**🛠 Admin Controls:**\n"
+            "• `/users` - Export database.\n"
+            "• `/ban [ID]` / `/unban [ID]` - Manage users.\n"
+            "• `/restart` - Reboot the server.")
+    await callback_query.message.edit_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Main Menu", callback_data="start")]]))
+
+@app.on_callback_query(filters.regex("^support$"))
+async def support_cb(client, callback_query):
+    text = ("**🎧 Help & Support Center**\n\n"
+            "**Common Issues:**\n"
+            "• *Bot is silent?* - The server might be processing a massive file for another user. Please be patient!\n"
+            "• *Upload failed?* - Make sure the file isn't larger than Telegram's 2GB limit.\n\n"
+            "If you need further assistance, please contact the administrators.")
     await callback_query.message.edit_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Main Menu", callback_data="start")]]))
 
 @app.on_callback_query(filters.regex("^settings$"))
@@ -72,7 +89,7 @@ async def settings_cb(client, callback_query):
     text = (f"**⚙️ Control Panel & Preferences**\n\n"
             f"**🎥 Current Video Quality:** `{quality}`\n"
             f"**🎯 Target Upload Channel:** `{target}`\n\n"
-            f"_Note: If you want files sent directly to a group or channel, add me as an Admin there and use the command `/set_channel` followed by the chat ID._")
+            f"_Select a default video quality below, or use /set_channel to change your upload destination._")
     
     buttons = InlineKeyboardMarkup([
         [InlineKeyboardButton("📺 Set 360p", callback_data="q_360p"), InlineKeyboardButton("📺 Set 480p", callback_data="q_480p")],
@@ -85,104 +102,77 @@ async def settings_cb(client, callback_query):
 async def set_quality_cb(client, callback_query):
     new_quality = callback_query.data.split("_")
     await update_settings(callback_query.from_user.id, "quality", new_quality)
-    await callback_query.answer(f"✅ Default video quality updated to {new_quality}!", show_alert=True)
+    await callback_query.answer(f"✅ Awesome! Your videos will now be compressed to {new_quality}.", show_alert=True)
     await settings_cb(client, callback_query)
 
-# --- CHANNEL SETTINGS ---
+# ==========================================
+# 🎯 INTERACTIVE /SET_CHANNEL PROCESS
+# ==========================================
 
-@app.on_message((filters.command("set_channel") | filters.regex(r"^-100\d+")) & filters.private)
-async def set_channel_cmd(client, message):
-    # Auto-detect if they used the command OR just pasted the ID directly
-    if message.text.startswith("-100"):
+@app.on_message(filters.command("set_channel") & filters.private)
+async def set_channel_start(client, message):
+    # Step 1: Trigger the conversational state
+    await update_settings(message.from_user.id, "state", "WAITING_FOR_CHANNEL")
+    
+    text = ("**🎯 Target Channel Setup**\n\n"
+            "You can route all your downloaded files directly to a specific Telegram Channel or Group.\n\n"
+            "**Step 1:** Add me to your Channel/Group and promote me to **Admin**.\n"
+            "**Step 2:** Please reply to this message with your **Chat ID** (e.g., `-1001234567890`).\n\n"
+            "_Send /cancel if you want to abort this process._")
+    await message.reply(text)
+
+@app.on_message(filters.command("cancel") & filters.private)
+async def cancel_process(client, message):
+    await update_settings(message.from_user.id, "state", None)
+    await message.reply("🚫 **Process Cancelled.** You have been returned to the main menu.")
+
+@app.on_message(filters.text & filters.private & ~filters.regex(r"(?i)mega\.nz") & ~filters.command(["start", "help", "users", "ban", "unban", "restart", "set_channel", "cancel"]))
+async def conversation_handler(client, message):
+    user = await get_user(message.from_user.id)
+    
+    # Check if the user is in the middle of setting up a channel
+    if user and user.get("state") == "WAITING_FOR_CHANNEL":
         channel_input = message.text.strip()
-    else:
-        parts = message.text.split()
-        if len(parts) < 2:
-            return await message.reply("⚠️ **Incorrect Usage**\n\nPlease provide the channel ID.\n\n**Example:** `/set_channel -1001234567890`")
-        channel_input = parts
         
-    try:
-        channel_id = int(channel_input)
-        
-        # 1. Save the channel to the database immediately
-        await update_settings(message.from_user.id, "target_channel", channel_id)
-        
-        # 2. Try to send the test message
         try:
-            test_msg = await client.send_message(channel_id, "🔗 **Connection Established:** Mega Bot is now linked to this channel.")
-            await test_msg.delete()
-            await message.reply(f"✅ **Target Channel Configured & Verified!**\n\nAll future files will be uploaded directly to `{channel_id}`.")
+            channel_id = int(channel_input)
             
-        # 3. If Telegram API blocks it (Cache Issue)
-        except Exception as e:
-            await message.reply(
-                f"✅ **Channel ID Saved (`{channel_id}`), but verification failed!**\n\n"
-                f"**Telegram API Error:** `{e}`\n\n"
-                f"**🛠️ HOW TO FIX THIS:**\n"
-                f"Telegram hasn't registered this channel in my cache yet. To fix this:\n"
-                f"1. Go to your channel.\n"
-                f"2. **Forward any message** from that channel directly to me here.\n"
-                f"3. Once you do that, uploads will work perfectly!"
-            )
+            # Save the channel and clear the state
+            await update_settings(message.from_user.id, "target_channel", channel_id)
+            await update_settings(message.from_user.id, "state", None)
             
-    except ValueError:
-        await message.reply("❌ **Error:** The channel ID must be a valid number (e.g., -100123...)")
-    except Exception as e:
-        await message.reply(f"❌ **Unexpected Error:** `{e}`")
+            # Send verification test
+            try:
+                test_msg = await client.send_message(channel_id, "🔗 **Connection Verified:** Mega Bot is now actively linked to this channel!")
+                await test_msg.delete()
+                await message.reply(f"🎉 **Success!**\n\nYour target channel has been configured to `{channel_id}`. All future downloads will be pushed there automatically.")
+            except Exception as e:
+                await message.reply(
+                    f"✅ **ID Saved (`{channel_id}`), but Verification Failed!**\n\n"
+                    f"**Why?** Telegram hasn't registered this channel in my memory yet.\n"
+                    f"**How to Fix:** Please go to your channel and **forward any message** from it to me here. Once you do that, it will work perfectly!"
+                )
+        except ValueError:
+            await message.reply("❌ **Invalid Format!**\n\nA Chat ID must be a number (like `-100987654321`). Please try sending the ID again, or type `/cancel` to abort.")
 
-# --- ADMIN COMMANDS ---
+# ==========================================
+# 🚀 1-BY-1 SEQUENTIAL MEGA ENGINE
+# ==========================================
 
-@app.on_message(filters.command("users") & filters.user(ADMINS))
-async def list_users(client, message):
-    users = await get_all_users()
-    file_path = "users_list.txt"
-    with open(file_path, "w") as f:
-        f.write(f"--- Mega Bot Database Export ---\nTotal Active Users: {len(users)}\n\n")
-        for u in users:
-            f.write(f"ID: {u['_id']} | Username: @{u.get('username', 'Unknown')} | Banned Status: {u.get('is_banned', False)}\n")
-    await message.reply_document(file_path, caption="📄 **Database Export Complete.**")
-    os.remove(file_path)
-
-@app.on_message(filters.command("ban") & filters.user(ADMINS))
-async def ban_cmd(client, message):
-    try:
-        user_id = int(message.text.split())
-        await ban_user(user_id, True)
-        await message.reply(f"✅ **Action Successful:** User `{user_id}` has been permanently banned.")
-    except (IndexError, ValueError):
-        await message.reply("⚠️ **Usage:** `/ban [user_id]`")
-
-@app.on_message(filters.command("unban") & filters.user(ADMINS))
-async def unban_cmd(client, message):
-    try:
-        user_id = int(message.text.split())
-        await ban_user(user_id, False)
-        await message.reply(f"✅ **Action Successful:** User `{user_id}` has had their access restored.")
-    except (IndexError, ValueError):
-        await message.reply("⚠️ **Usage:** `/unban [user_id]`")
-
-@app.on_message(filters.command("restart") & filters.user(ADMINS))
-async def restart_bot(client, message):
-    await message.reply("🔄 **Initiating Server Reboot...** Please wait 10-15 seconds for systems to come back online.")
-    os.execl(sys.executable, sys.executable, *sys.argv)
-
-
-# --- MEGA DOWNLOAD LOGIC ---
-
-async def process_file(client, message, file_path, status_msg, user):
+async def process_upload(client, message, file_path, status_msg, user):
     quality = user.get("quality", "360p")
     target_channel = user.get("target_channel")
     upload_path = file_path
 
     if file_path.lower().endswith(('.mp4', '.mkv', '.avi', '.webm')):
-        await status_msg.edit(f"⚙️ **Transcoding Video...**\nProcessing to {quality}. This takes time depending on file size.")
+        await status_msg.edit(f"⚙️ **Transcoding Engine Active...**\n\n_Compressing video to {quality}. Please wait..._")
         converted_path = os.path.join(DOWNLOAD_DIR, f"conv_{os.path.basename(file_path)}")
         res = await convert_video(file_path, converted_path, quality)
         if res:
             os.remove(file_path)
             upload_path = converted_path
 
-    await status_msg.edit(f"📤 **Uploading:** `{os.path.basename(upload_path)}`")
+    await status_msg.edit(f"📤 **Uploading to Telegram:**\n`{os.path.basename(upload_path)}`")
     
     dump_msg = await client.send_document(chat_id=DUMP_CHANNEL, document=upload_path, caption=f"📁 **File:** `{os.path.basename(upload_path)}`\n👤 **Requested By:** `{message.from_user.id}`{CREDIT_TEXT}")
     
@@ -194,57 +184,89 @@ async def process_file(client, message, file_path, status_msg, user):
     else:
         await dump_msg.copy(chat_id=message.chat.id)
 
+    # Clean up local storage immediately
     if os.path.exists(upload_path):
         os.remove(upload_path)
 
 @app.on_message(filters.regex(r"(?i)mega\.nz") & filters.private)
 async def handle_mega(client, message):
-    status_msg = await message.reply("🔍 Analyzing Link...")
+    status_msg = await message.reply("🔍 **Intercepting Mega Link...**\n_Reading encryption keys..._")
     
     try:
-        if await is_banned(message.from_user.id):
-            return await status_msg.edit("🚫 Access Denied.")
-            
-        url = extract_and_convert_mega_link(message.text or message.caption)
-        if not url:
-            return await status_msg.edit("❌ Invalid Link format.")
-            
-        await status_msg.edit("📥 **Downloading Folder to Server...**\n\n_Note: The bot must download the entire folder to its server first, then it will upload them to Telegram one by one._")
         user = await get_user(message.from_user.id)
+        if user.get("is_banned"):
+            return await status_msg.edit("🚫 **Access Denied.**")
+            
+        # Extract Link
+        url_match = re.search(r"(https?://(?:www\.)?mega\.nz/[^\s]+)", message.text or message.caption, re.IGNORECASE)
+        if not url_match:
+            return await status_msg.edit("❌ **Invalid Format.** Could not isolate a proper Mega link.")
+        url = url_match.group(1)
+
+        await status_msg.edit("⏳ **Querying Mega API...**\n_Mapping folder structure and nodes..._")
         
+        # Download logic using the mega.py wrapper to handle files inside the folder dynamically
         task_dir = os.path.join(DOWNLOAD_DIR, str(uuid.uuid4()))
         os.makedirs(task_dir, exist_ok=True)
         
-        cmd = f"megadl '{url}' --path '{task_dir}'"
-        process = await asyncio.create_subprocess_shell(cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        stdout, stderr = await process.communicate()
+        # Run the mega.py download synchronously in a thread
+        loop = asyncio.get_event_loop()
         
-        if process.returncode != 0:
-            err = (stderr.decode() or stdout.decode()).strip()
-            raise Exception(f"Megatools Download Error:\n`{err}`")
-            
-        await status_msg.edit("📂 **Download Complete!** Uploading to Telegram one by one...")
+        await status_msg.edit("📥 **Extraction Sequence Started!**\n\n_I am downloading the contents to my temporary server. For massive folders, this step may take several minutes._")
+        
+        # mega_api.download_url handles both files and folders based on the link provided
+        downloaded_path = await loop.run_in_executor(None, mega_api.download_url, url, task_dir)
+        
+        await status_msg.edit("📂 **Extraction Complete!**\n\n_Initializing the one-by-one upload sequence..._")
         
         uploaded_count = 0
-        for root, dirs, files in os.walk(task_dir):
-            for file in files:
-                await process_file(client, message, os.path.join(root, file), status_msg, user)
-                uploaded_count += 1
-                
+        
+        # If it was a single file, downloaded_path is a string. If folder, we walk the dir.
+        if isinstance(downloaded_path, str) and os.path.isfile(downloaded_path):
+            await process_upload(client, message, downloaded_path, status_msg, user)
+            uploaded_count += 1
+        else:
+            # Iterate through the folder and upload ONE BY ONE
+            for root, dirs, files in os.walk(task_dir):
+                for file in files:
+                    full_path = os.path.join(root, file)
+                    await status_msg.edit(f"📦 **Processing item {uploaded_count + 1}...**")
+                    await process_upload(client, message, full_path, status_msg, user)
+                    uploaded_count += 1
+                    
         if uploaded_count == 0:
-            await status_msg.edit("⚠️ Extraction finished, but folder was empty.")
+            await status_msg.edit("⚠️ **Warning:** The folder was processed, but no readable files were found inside.")
         else:
             await status_msg.delete()
-            await message.reply(f"✅ **Batch Process Completed!** Successfully uploaded {uploaded_count} files.")
+            await message.reply(f"✅ **Mission Accomplished!**\n\n🎉 Successfully processed and uploaded **{uploaded_count}** files.")
             
     except Exception as e:
-        await status_msg.edit(f"❌ **Error:** `{str(e)}`")
+        logger.error(f"Mega Logic Error: {str(e)}")
+        await status_msg.edit(f"❌ **System Error:**\n\n`{str(e)}`")
     finally:
+        # Final safety cleanup ensures disk space is wiped clean
         if 'task_dir' in locals() and os.path.exists(task_dir):
             shutil.rmtree(task_dir, ignore_errors=True)
 
+# ==========================================
+# 🛡 ADMIN COMMANDS & WEB SERVER
+# ==========================================
 
-# --- WEB SERVER (RENDER REQUIREMENT) ---
+@app.on_message(filters.command("users") & filters.user(ADMINS))
+async def list_users(client, message):
+    users = await get_all_users()
+    file_path = "users_list.txt"
+    with open(file_path, "w") as f:
+        f.write(f"--- Mega Bot Database ---\nTotal Active Users: {len(users)}\n\n")
+        for u in users:
+            f.write(f"ID: {u['_id']} | Username: @{u.get('username', 'Unknown')}\n")
+    await message.reply_document(file_path)
+    os.remove(file_path)
+
+@app.on_message(filters.command("restart") & filters.user(ADMINS))
+async def restart_bot(client, message):
+    await message.reply("🔄 **Initiating Server Reboot...**")
+    os.execl(sys.executable, sys.executable, *sys.argv)
 
 async def web_handler(request):
     return web.Response(text="Mega Bot Service is Active and Healthy!")
@@ -256,9 +278,6 @@ async def start_webserver():
     await runner.setup()
     site = web.TCPSite(runner, '0.0.0.0', PORT)
     await site.start()
-    logger.info(f"🌐 Cloud Health-Check Web Server initialized on Port {PORT}")
-
-# --- STARTUP SEQUENCE ---
 
 async def main():
     await start_webserver()
