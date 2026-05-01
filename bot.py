@@ -92,17 +92,22 @@ async def set_quality_cb(client, callback_query):
 
 @app.on_message(filters.command("set_channel") & filters.private)
 async def set_channel_cmd(client, message):
-    if len(message.command) < 2:
+    parts = message.text.split()
+    if len(parts) < 2:
         return await message.reply("⚠️ **Incorrect Usage**\n\nPlease provide the ID of the channel or group you want to route files to.\n\n**Example:** `/set_channel -1001234567890`")
     
     try:
-        channel_id = int(message.command)
+        # Safely extract the ID using standard Python string splitting
+        channel_id = int(parts)
+        
         # Test the connection to ensure the bot has permission
         test_msg = await client.send_message(channel_id, "🔗 **Connection Established:** Mega Bot is now linked to this channel.")
+        await test_msg.delete()
+        
         await update_settings(message.from_user.id, "target_channel", channel_id)
         await message.reply(f"✅ **Target Channel Configured!**\n\nAll future files will be uploaded directly to `{channel_id}`.\n_Make sure I remain an admin, otherwise uploads will fail._")
     except ValueError:
-        await message.reply("❌ **Error:** The channel ID must be a number (e.g., -100...)")
+        await message.reply("❌ **Error:** The channel ID must be a valid number (e.g., -100123...)")
     except Exception as e:
         await message.reply(f"❌ **Connection Failed:**\nI cannot send messages to that channel. Make sure I am added as an Admin.\n\n`Error Details: {e}`")
 
@@ -122,7 +127,7 @@ async def list_users(client, message):
 @app.on_message(filters.command("ban") & filters.user(ADMINS))
 async def ban_cmd(client, message):
     try:
-        user_id = int(message.command)
+        user_id = int(message.text.split())
         await ban_user(user_id, True)
         await message.reply(f"✅ **Action Successful:** User `{user_id}` has been permanently banned.")
     except (IndexError, ValueError):
@@ -131,7 +136,7 @@ async def ban_cmd(client, message):
 @app.on_message(filters.command("unban") & filters.user(ADMINS))
 async def unban_cmd(client, message):
     try:
-        user_id = int(message.command)
+        user_id = int(message.text.split())
         await ban_user(user_id, False)
         await message.reply(f"✅ **Action Successful:** User `{user_id}` has had their access restored.")
     except (IndexError, ValueError):
