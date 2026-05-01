@@ -166,7 +166,8 @@ async def restart_bot(client, message):
     await message.reply("🔄 **Initiating Server Reboot...** Please wait 10-15 seconds for systems to come back online.")
     os.execl(sys.executable, sys.executable, *sys.argv)
 
-# --- MAIN MEGA LOGIC ---
+
+# --- MEGA DOWNLOAD LOGIC ---
 
 async def process_file(client, message, file_path, status_msg, user):
     quality = user.get("quality", "360p")
@@ -174,28 +175,21 @@ async def process_file(client, message, file_path, status_msg, user):
     upload_path = file_path
 
     if file_path.lower().endswith(('.mp4', '.mkv', '.avi', '.webm')):
-        await status_msg.edit(f"⚙️ **Transcoding Video Engine Active**\n\nProcessing media down to **{quality}** using hardware FFmpeg. Please be patient, as this takes time depending on the file size...")
+        await status_msg.edit(f"⚙️ **Transcoding Video...**\nProcessing to {quality}. This takes time depending on file size.")
         converted_path = os.path.join(DOWNLOAD_DIR, f"conv_{os.path.basename(file_path)}")
         res = await convert_video(file_path, converted_path, quality)
         if res:
             os.remove(file_path)
             upload_path = converted_path
 
-    await status_msg.edit(f"📤 **Upload in Progress...**\n\nPushing `{os.path.basename(upload_path)}` directly to Telegram servers.")
+    await status_msg.edit(f"📤 **Uploading:** `{os.path.basename(upload_path)}`")
     
-    # Secure Dump Upload
-    dump_msg = await client.send_document(
-        chat_id=DUMP_CHANNEL, 
-        document=upload_path,
-        caption=f"📁 **File Data:** `{os.path.basename(upload_path)}`\n👤 **Requested By:** `{message.from_user.id}`{CREDIT_TEXT}"
-    )
+    dump_msg = await client.send_document(chat_id=DUMP_CHANNEL, document=upload_path, caption=f"📁 **File:** `{os.path.basename(upload_path)}`\n👤 **Requested By:** `{message.from_user.id}`{CREDIT_TEXT}")
     
-    # Route to user or target
     if target_channel:
         try:
             await dump_msg.copy(chat_id=target_channel)
-        except Exception as e:
-            await message.reply(f"⚠️ **Warning:** Could not route to your target channel. Sending here instead.\n`{e}`")
+        except Exception:
             await dump_msg.copy(chat_id=message.chat.id)
     else:
         await dump_msg.copy(chat_id=message.chat.id)
@@ -205,7 +199,7 @@ async def process_file(client, message, file_path, status_msg, user):
 
 @app.on_message(filters.regex(r"(?i)mega\.nz") & filters.private)
 async def handle_mega(client, message):
-    status_msg = await message.reply("🔍 **Analyzing Link...**")
+    status_msg = await message.reply("🔍 Analyzing Link...")
     
     try:
         if await is_banned(message.from_user.id):
@@ -215,84 +209,39 @@ async def handle_mega(client, message):
         if not url:
             return await status_msg.edit("❌ Invalid Link format.")
             
+        await status_msg.edit("📥 **Downloading Folder to Server...**\n\n_Note: The bot must download the entire folder to its server first, then it will upload them to Telegram one by one._")
         user = await get_user(message.from_user.id)
-        file_links = []
         
-        # --- FOLDER DETECTION & ONE-BY-ONE QUEUE ---
-        if "#F!" in url:
-            await status_msg.edit("📂 **Folder Detected!** Fetching file list...")
+        task_dir = os.path.join(DOWNLOAD_DIR, str(uuid.uuid4()))
+        os.makedirs(task_dir, exist_ok=True)
+        
+        cmd = f"megadl '{url}' --path '{task_dir}'"
+        process = await asyncio.create_subprocess_shell(cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        stdout, stderr = await process.communicate()
+        
+        if process.returncode != 0:
+            err = (stderr.decode() or stdout.decode()).strip()
+            raise Exception(f"Megatools Download Error:\n`{err}`")
             
-            cmd = f"megals -e '{url}'"
-            process = await asyncio.create_subprocess_shell(
-                cmd, 
-                stdout=asyncio.subprocess.PIPE, 
-                stderr=asyncio.subprocess.PIPE
-            )
-            stdout, stderr = await process.communicate()
-
-            if process.returncode != 0:
-                debug_err = stderr.decode() or stdout.decode()
-                raise Exception(f"Failed to read folder contents.\n\n**Server Error Log:**\n`{debug_err.strip()}`")
-              
-            # Filter the output to ONLY grab actual files, ignoring subfolder containers
-            output = stdout.decode().strip().split('\n')
-            for line in output:
-                link = line.strip()
-                # megals exports individual files with #!
-                if "https://mega.nz/" in link and "#!" in link:
-                    file_links.append(link)
-            
-            if not file_links:
-                return await status_msg.edit("⚠️ **Folder is empty or couldn't be read.**")
-                
-            await status_msg.edit(f"📋 **Found {len(file_links)} files!** Starting sequential download process...")
-        else:
-            file_links = [url]
-            await status_msg.edit("📥 **Single File Detected.** Starting download...")
-
-        # --- SEQUENTIAL PROCESS (DOWNLOAD 1 -> UPLOAD 1 -> DELETE 1) ---
+        await status_msg.edit("📂 **Download Complete!** Uploading to Telegram one by one...")
+        
         uploaded_count = 0
-        
-        for index, file_link in enumerate(file_links, start=1):
-            task_dir = os.path.join(DOWNLOAD_DIR, str(uuid.uuid4()))
-            os.makedirs(task_dir, exist_ok=True)
-            
-            try:
-                await status_msg.edit(f"⏳ **Processing File {index} of {len(file_links)}...**\n\n📥 _Downloading from Mega..._")
+        for root, dirs, files in os.walk(task_dir):
+            for file in files:
+                await process_file(client, message, os.path.join(root, file), status_msg, user)
+                uploaded_count += 1
                 
-                dl_cmd = f"megadl '{file_link}' --path '{task_dir}'"
-                dl_process = await asyncio.create_subprocess_shell(
-                    dl_cmd, 
-                    stdout=asyncio.subprocess.PIPE, 
-                    stderr=asyncio.subprocess.PIPE
-                )
-                await dl_process.communicate()
-                
-                if dl_process.returncode != 0:
-                    logger.error(f"Skipping {file_link} - Download failed.")
-                    continue 
-                    
-                for root, dirs, files in os.walk(task_dir):
-                    for file in files:
-                        full_path = os.path.join(root, file)
-                        await process_file(client, message, full_path, status_msg, user)
-                        uploaded_count += 1
-                        
-            except Exception as file_error:
-                logger.error(f"Error on file {index}: {str(file_error)}")
-            finally:
-                # Deletes the file immediately to save server storage
-                if os.path.exists(task_dir):
-                    shutil.rmtree(task_dir, ignore_errors=True)
-
         if uploaded_count == 0:
-            await status_msg.edit("⚠️ **Process finished, but no files were successfully uploaded.**")
+            await status_msg.edit("⚠️ Extraction finished, but folder was empty.")
         else:
             await status_msg.delete()
-            await message.reply(f"✅ **Batch Process Complete!**\nSuccessfully downloaded, transcoded, and uploaded **{uploaded_count}** files.")
+            await message.reply(f"✅ **Batch Process Completed!** Successfully uploaded {uploaded_count} files.")
             
     except Exception as e:
         await status_msg.edit(f"❌ **Error:** `{str(e)}`")
+    finally:
+        if 'task_dir' in locals() and os.path.exists(task_dir):
+            shutil.rmtree(task_dir, ignore_errors=True)
 
 
 # --- WEB SERVER (RENDER REQUIREMENT) ---
