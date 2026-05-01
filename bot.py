@@ -229,10 +229,11 @@ async def handle_mega(client, message):
                 stderr=asyncio.subprocess.PIPE
             )
             stdout, stderr = await process.communicate()
-            
+
             if process.returncode != 0:
-                raise Exception(f"Failed to read folder contents. It might be empty or locked.")
-                
+                debug_err = stderr.decode() or stdout.decode()
+                raise Exception(f"Failed to read folder contents.\n\n**Server Error Log:**\n`{debug_err.strip()}`")
+              
             # Filter the output to ONLY grab actual files, ignoring subfolder containers
             output = stdout.decode().strip().split('\n')
             for line in output:
