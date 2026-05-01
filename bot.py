@@ -169,38 +169,47 @@ async def process_file(client, message, file_path, status_msg, user):
     if os.path.exists(upload_path):
         os.remove(upload_path) # Cleanup
 
-@app.on_message(filters.regex(r"mega\.nz") & filters.private)
+@app.on_message(filters.regex(r"(?i)mega\.nz") & filters.private)
 async def handle_mega(client, message):
-    if await is_banned(message.from_user.id):
-        return
-    
-    # 1. Extract ONLY the Mega URL from the message
-    url_match = re.search(r"(https?://(?:www\.)?mega\.nz/[^\s]+)", message.text)
-    if not url_match:
-        return await message.reply("❌ Could not find a valid Mega link in your message.")
-    
-    url = url_match.group(1)
-    
-    # 2. PROPERLY convert new Mega URL formats to classic format
-    if "/folder/" in url and "#" in url:
-        parts = url.split("#")
-        url = f"{parts.replace('/folder/', '/#F!')}!{parts}"
-    elif "/file/" in url and "#" in url:
-        parts = url.split("#")
-        url = f"{parts.replace('/file/', '/#!')}!{parts}"
-        
-    status_msg = await message.reply("⏳ Connecting to Mega...")
-    user = await get_user(message.from_user.id)
-    
-    # 3. Create a unique temporary folder
-    task_id = str(uuid.uuid4())
-    task_dir = os.path.join(DOWNLOAD_DIR, task_id)
-    os.makedirs(task_dir, exist_ok=True)
+    # 1. REPLY IMMEDIATELY so you know the bot isn't dead
+    status_msg = await message.reply("🔍 Link received! Checking details...")
     
     try:
-        await status_msg.edit(f"📥 Downloading from Mega... (Folder Support Enabled)")
+        # 2. Now check the database (if this hangs, we will know!)
+        if await is_banned(message.from_user.id):
+            return await status_msg.edit("🚫 You are banned from using this bot.")
         
-        # 4. Use megatools to download
+        # 3. Handle both normal texts and photo captions safely
+        text = message.text or message.caption
+        if not text:
+            return await status_msg.edit("❌ No text found in the message.")
+            
+        # 4. Extract ONLY the Mega URL (Case Insensitive)
+        url_match = re.search(r"(https?://(?:www\.)?mega\.nz/[^\s]+)", text, re.IGNORECASE)
+        if not url_match:
+            return await status_msg.edit("❌ Could not find a valid Mega link. Make sure it includes https://")
+        
+        url = url_match.group(1)
+        
+        # 5. Convert new Mega URL formats to classic format
+        if "/folder/" in url and "#" in url:
+            parts = url.split("#")
+            url = f"{parts.replace('/folder/', '/#F!')}!{parts}"
+        elif "/file/" in url and "#" in url:
+            parts = url.split("#")
+            url = f"{parts.replace('/file/', '/#!')}!{parts}"
+            
+        await status_msg.edit("⏳ Connecting to Mega...")
+        user = await get_user(message.from_user.id)
+        
+        # 6. Create a unique temporary folder
+        task_id = str(uuid.uuid4())
+        task_dir = os.path.join(DOWNLOAD_DIR, task_id)
+        os.makedirs(task_dir, exist_ok=True)
+        
+        await status_msg.edit("📥 Downloading from Mega... (Folder Support Enabled)")
+        
+        # 7. Use megatools to download
         cmd = f"megadl '{url}' --path '{task_dir}'"
         process = await asyncio.create_subprocess_shell(
             cmd,
@@ -215,7 +224,7 @@ async def handle_mega(client, message):
             
         await status_msg.edit("📂 Processing and uploading downloaded files...")
         
-        # 5. Walk through and upload
+        # 8. Walk through and upload
         uploaded_count = 0
         for root, dirs, files in os.walk(task_dir):
             for file in files:
@@ -224,7 +233,6 @@ async def handle_mega(client, message):
                 uploaded_count += 1
                 
         if uploaded_count == 0:
-            # Added debug output so we can see what megatools is thinking if it fails
             debug_info = stderr.decode() or stdout.decode()
             await status_msg.edit(f"⚠️ Download completed, but no files were found.\n\n**Debug Log:**\n`{debug_info[:800]}`")
         else:
@@ -235,8 +243,8 @@ async def handle_mega(client, message):
         await status_msg.edit(f"❌ Error processing link:\n`{str(e)}`")
         
     finally:
-        # 6. Clean up
-        if os.path.exists(task_dir):
+        # 9. Clean up
+        if 'task_dir' in locals() and os.path.exists(task_dir):
             shutil.rmtree(task_dir, ignore_errors=True)
 
 
