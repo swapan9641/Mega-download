@@ -17,7 +17,7 @@ Create a `.env` file referencing `.env.example`.
 ```bash
 docker-compose up -d --build
 
-##manual delpoy base
+### MANUAL DELPOY BASE
 
 python -m venv venv
 source venv/bin/activate
