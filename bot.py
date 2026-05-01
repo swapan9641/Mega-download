@@ -11,7 +11,6 @@ from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from config import *
 from database import *
 from video_utils import convert_video
-# (Remove the 'from mega import Mega' and 'm = mega.login()' lines completely)
 
 # Professional Logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -19,8 +18,6 @@ logger = logging.getLogger(__name__)
 logging.getLogger("pyrogram").setLevel(logging.WARNING)
 
 app = Client("MegaBot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
-mega = Mega()
-m = mega.login()
 
 # --- USER COMMANDS ---
 
