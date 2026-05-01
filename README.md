@@ -15,11 +15,13 @@ Create a `.env` file referencing `.env.example`.
 
 ### Docker Deployment (Recommended)
 ```bash
-docker-compose up -d --build
+docker-compose up -d --𝗯𝘂𝗶𝗹𝗱
 
-### MANUAL DELPOY BASE
-
+### 𝗠𝗲𝗻𝘂𝗮𝗹 𝗗𝗲𝗽𝗹𝗼𝘆
+```bash
 python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 python bot.py
+```
+
