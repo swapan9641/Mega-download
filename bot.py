@@ -90,14 +90,19 @@ async def set_quality_cb(client, callback_query):
 
 # --- CHANNEL SETTINGS ---
 
-@app.on_message(filters.command("set_channel") & filters.private)
+@app.on_message((filters.command("set_channel") | filters.regex(r"^-100\d+")) & filters.private)
 async def set_channel_cmd(client, message):
-    parts = message.text.split()
-    if len(parts) < 2:
-        return await message.reply("⚠️ **Incorrect Usage**\n\nPlease provide the ID of the channel or group you want to route files to.\n\n**Example:** `/set_channel -1001234567890`")
-    
+    # Auto-detect if they used the command OR just pasted the ID directly
+    if message.text.startswith("-100"):
+        channel_input = message.text.strip()
+    else:
+        parts = message.text.split()
+        if len(parts) < 2:
+            return await message.reply("⚠️ **Incorrect Usage**\n\nPlease provide the channel ID.\n\n**Example:** `/set_channel -1001234567890`")
+        channel_input = parts
+        
     try:
-        channel_id = int(parts)
+        channel_id = int(channel_input)
         
         # 1. Save the channel to the database immediately
         await update_settings(message.from_user.id, "target_channel", channel_id)
@@ -107,8 +112,8 @@ async def set_channel_cmd(client, message):
             test_msg = await client.send_message(channel_id, "🔗 **Connection Established:** Mega Bot is now linked to this channel.")
             await test_msg.delete()
             await message.reply(f"✅ **Target Channel Configured & Verified!**\n\nAll future files will be uploaded directly to `{channel_id}`.")
-        
-        # 3. If test message fails due to Telegram Cache, explain the fix!
+            
+        # 3. If Telegram API blocks it (Cache Issue)
         except Exception as e:
             await message.reply(
                 f"✅ **Channel ID Saved (`{channel_id}`), but verification failed!**\n\n"
@@ -117,11 +122,13 @@ async def set_channel_cmd(client, message):
                 f"Telegram hasn't registered this channel in my cache yet. To fix this:\n"
                 f"1. Go to your channel.\n"
                 f"2. **Forward any message** from that channel directly to me here.\n"
-                f"3. Once you do that, my database will recognize the channel, and uploads will work perfectly!"
+                f"3. Once you do that, uploads will work perfectly!"
             )
             
     except ValueError:
         await message.reply("❌ **Error:** The channel ID must be a valid number (e.g., -100123...)")
+    except Exception as e:
+        await message.reply(f"❌ **Unexpected Error:** `{e}`")
 
 # --- ADMIN COMMANDS ---
 
