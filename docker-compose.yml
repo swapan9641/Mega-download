@@ -7,5 +7,7 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    ports:
+      - "${PORT:-8080}:8080"
     volumes:
       - ./downloads:/app/downloads
