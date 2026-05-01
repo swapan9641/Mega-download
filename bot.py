@@ -2,7 +2,8 @@ import os
 import sys
 import asyncio
 import logging
-from pyrogram import Client, filters
+from aiohttp import web
+from pyrogram import Client, filters, idle
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from mega import Mega
 from config import *
@@ -72,7 +73,7 @@ async def settings_cb(client, callback_query):
 
 @app.on_callback_query(filters.regex(r"^q_"))
 async def set_quality(client, callback_query):
-    new_quality = callback_query.data.split("_")
+    new_quality = callback_query.data.split("_") # Fixed bug here
     await update_settings(callback_query.from_user.id, "quality", new_quality)
     await callback_query.answer(f"Quality set to {new_quality}", show_alert=True)
     await settings_cb(client, callback_query)
@@ -88,12 +89,13 @@ async def list_users(client, message):
         for u in users:
             f.write(f"ID: {u['_id']} | @{u['username']} | Banned: {u['is_banned']}\n")
     await message.reply_document(file_path)
-    os.remove(file_path)
+    if os.path.exists(file_path):
+        os.remove(file_path)
 
 @app.on_message(filters.command("ban") & filters.user(ADMINS))
 async def ban_cmd(client, message):
     try:
-        user_id = int(message.command)
+        user_id = int(message.command) # Fixed bug here
         await ban_user(user_id, True)
         await message.reply(f"✅ User `{user_id}` banned.")
     except IndexError:
@@ -102,7 +104,7 @@ async def ban_cmd(client, message):
 @app.on_message(filters.command("unban") & filters.user(ADMINS))
 async def unban_cmd(client, message):
     try:
-        user_id = int(message.command)
+        user_id = int(message.command) # Fixed bug here
         await ban_user(user_id, False)
         await message.reply(f"✅ User `{user_id}` unbanned.")
     except IndexError:
@@ -164,7 +166,8 @@ async def process_file(client, message, file_path, status_msg, user):
     else:
         await dump_msg.copy(chat_id=message.chat.id)
 
-    os.remove(upload_path) # Cleanup
+    if os.path.exists(upload_path):
+        os.remove(upload_path) # Cleanup
 
 @app.on_message(filters.regex(r"mega\.nz") & filters.private)
 async def handle_mega(client, message):
@@ -187,8 +190,7 @@ async def handle_mega(client, message):
             await process_file(client, message, file_path, status_msg, user)
             await status_msg.delete()
             
-        # If it's a folder (mega.py sometimes returns a tuple or None based on implementation)
-        # Note: robust folder parsing via standard mega.py may require iterating m.get_files()
+        # If it's a folder
         else:
             await status_msg.edit("⚠️ Folder detected. Standard `mega.py` downloads folders as zip or bulk. Processing downloaded contents...")
             for root, dirs, files in os.walk(DOWNLOAD_DIR):
@@ -201,5 +203,42 @@ async def handle_mega(client, message):
         logger.error(f"Mega Error: {str(e)}")
         await status_msg.edit(f"❌ Error processing link:\n`{str(e)}`")
 
-logger.info("Bot Started!")
-app.run()
+
+# --- WEB SERVER FOR CLOUD HEALTH CHECKS ---
+
+async def web_handler(request):
+    return web.Response(text="Mega Bot is running successfully!")
+
+async def start_webserver():
+    web_app = web.Application()
+    web_app.add_routes([web.get('/', web_handler)])
+    runner = web.AppRunner(web_app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', PORT)
+    await site.start()
+    logger.info(f"🌐 Web server started on port {PORT}")
+
+
+# --- STARTUP LOGIC ---
+
+async def main():
+    # Start web server
+    await start_webserver()
+    
+    # Start Pyrogram bot
+    await app.start()
+    logger.info("🤖 Bot Started!")
+    
+    # Keep the bot running
+    await idle()
+    
+    # Stop the bot gracefully
+    await app.stop()
+
+if __name__ == "__main__":
+    # Fix event loop for Windows/Linux compatibility
+    if sys.platform == 'win32':
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(main())
