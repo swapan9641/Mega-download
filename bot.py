@@ -97,19 +97,31 @@ async def set_channel_cmd(client, message):
         return await message.reply("⚠️ **Incorrect Usage**\n\nPlease provide the ID of the channel or group you want to route files to.\n\n**Example:** `/set_channel -1001234567890`")
     
     try:
-        # Safely extract the ID using standard Python string splitting
         channel_id = int(parts)
         
-        # Test the connection to ensure the bot has permission
-        test_msg = await client.send_message(channel_id, "🔗 **Connection Established:** Mega Bot is now linked to this channel.")
-        await test_msg.delete()
-        
+        # 1. Save the channel to the database immediately
         await update_settings(message.from_user.id, "target_channel", channel_id)
-        await message.reply(f"✅ **Target Channel Configured!**\n\nAll future files will be uploaded directly to `{channel_id}`.\n_Make sure I remain an admin, otherwise uploads will fail._")
+        
+        # 2. Try to send the test message
+        try:
+            test_msg = await client.send_message(channel_id, "🔗 **Connection Established:** Mega Bot is now linked to this channel.")
+            await test_msg.delete()
+            await message.reply(f"✅ **Target Channel Configured & Verified!**\n\nAll future files will be uploaded directly to `{channel_id}`.")
+        
+        # 3. If test message fails due to Telegram Cache, explain the fix!
+        except Exception as e:
+            await message.reply(
+                f"✅ **Channel ID Saved (`{channel_id}`), but verification failed!**\n\n"
+                f"**Telegram API Error:** `{e}`\n\n"
+                f"**🛠️ HOW TO FIX THIS:**\n"
+                f"Telegram hasn't registered this channel in my cache yet. To fix this:\n"
+                f"1. Go to your channel.\n"
+                f"2. **Forward any message** from that channel directly to me here.\n"
+                f"3. Once you do that, my database will recognize the channel, and uploads will work perfectly!"
+            )
+            
     except ValueError:
         await message.reply("❌ **Error:** The channel ID must be a valid number (e.g., -100123...)")
-    except Exception as e:
-        await message.reply(f"❌ **Connection Failed:**\nI cannot send messages to that channel. Make sure I am added as an Admin.\n\n`Error Details: {e}`")
 
 # --- ADMIN COMMANDS ---
 
