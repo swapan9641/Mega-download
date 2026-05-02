@@ -115,7 +115,7 @@ async def conversation_handler(client, message):
             await message.reply("❌ **Invalid Format!** Must be a numeric ID.")
 
 # ==========================================
-# 🚀 CORE ENGINE: SEQUENTIAL MEGA EXTRACTION
+# 🚀 CORE ENGINE: AUTHENTICATED BATCH EXTRACTION
 # ==========================================
 async def execute_cmd(cmd: str) -> tuple[str, str, int]:
     """Robust async subprocess executor."""
@@ -154,7 +154,6 @@ async def process_single_upload(client, message, file_path, status_msg, user, cu
     except FloodWait as e:
         logger.warning(f"FloodWait triggered. Sleeping for {e.value} seconds.")
         await asyncio.sleep(e.value)
-        # Retry once after sleep
         await client.send_document(chat_id=message.chat.id, document=upload_path)
     except Exception as e:
         logger.error(f"Upload error: {e}")
@@ -177,69 +176,50 @@ async def handle_mega(client, message):
         if not url: 
             return await status_msg.edit("❌ Invalid Link format.")
 
-        file_links = []
+        task_dir = os.path.join(DOWNLOAD_DIR, str(uuid.uuid4()))
+        os.makedirs(task_dir, exist_ok=True)
         
-        # 1. Folder Detection & Authentication List
-        if "#F!" in url:
-            await status_msg.edit("📂 **Folder Detected!** Authenticating session to read contents...")
-            cmd = f"megals --config {MEGARC_PATH} -e '{url}'"
-            stdout, stderr, code = await execute_cmd(cmd)
-            
-            if code != 0:
-                raise Exception(f"Authentication or Parsing Failed:\n`{stderr or stdout}`")
-                
-            for line in stdout.split('\n'):
-                if "https://mega.nz/" in line and "#!" in line:
-                    file_links.append(line.strip())
-            
-            if not file_links:
-                return await status_msg.edit("⚠️ Folder is empty or locked.")
-                
-            await status_msg.edit(f"📋 **Mapped {len(file_links)} files!** Commencing sequential process...")
-        else:
-            file_links = [url]
-            await status_msg.edit("📥 **Single File Detected.**")
+        # We download the folder using your authenticated credentials
+        await status_msg.edit("📥 **Downloading Payload to Server...**\n\n_Because this is a public folder, I am downloading the full package first. I will separate and upload the files sequentially right after._")
+        
+        dl_cmd = f"megadl --config {MEGARC_PATH} '{url}' --path '{task_dir}'"
+        stdout, stderr, code = await execute_cmd(dl_cmd)
+        
+        if code != 0:
+            raise Exception(f"Download failed. Check link or storage limits:\n`{stderr or stdout}`")
 
-        # 2. Strict One-by-One Loop
-        successful = 0
-        total = len(file_links)
+        # Map all downloaded files to upload them one-by-one
+        downloaded_files = []
+        for root, dirs, files in os.walk(task_dir):
+            for file in files:
+                downloaded_files.append(os.path.join(root, file))
+                
+        total = len(downloaded_files)
         
-        for index, link in enumerate(file_links, 1):
-            task_dir = os.path.join(DOWNLOAD_DIR, str(uuid.uuid4()))
-            os.makedirs(task_dir, exist_ok=True)
+        if total == 0:
+            await status_msg.edit("⚠️ **Process finished, but the folder was empty.**")
+            return
             
+        await status_msg.edit(f"📂 **Extraction Complete!**\n\n_Mapped {total} files. Initiating sequential upload..._")
+        
+        successful = 0
+        for index, file_path in enumerate(downloaded_files, 1):
             try:
-                await status_msg.edit(f"📥 **Downloading File {index}/{total}...**")
-                
-                dl_cmd = f"megadl --config {MEGARC_PATH} '{link}' --path '{task_dir}'"
-                stdout, stderr, code = await execute_cmd(dl_cmd)
-                
-                if code != 0:
-                    logger.error(f"Download failed for {link}: {stderr}")
-                    continue
-                    
-                for root, dirs, files in os.walk(task_dir):
-                    for file in files:
-                        full_path = os.path.join(root, file)
-                        await process_single_upload(client, message, full_path, status_msg, user, index, total)
-                        successful += 1
-                        
+                await process_single_upload(client, message, file_path, status_msg, user, index, total)
+                successful += 1
             except Exception as e:
                 logger.error(f"Error on file {index}: {e}")
-            finally:
-                # STRICT DIRECTORY PURGE
-                if os.path.exists(task_dir):
-                    shutil.rmtree(task_dir, ignore_errors=True)
 
-        if successful == 0:
-            await status_msg.edit("⚠️ **Process finished, but all files failed to transfer.**")
-        else:
-            await status_msg.delete()
-            await message.reply(f"✅ **Operation Complete!**\nSuccessfully extracted **{successful}/{total}** files.")
+        await status_msg.delete()
+        await message.reply(f"✅ **Operation Complete!**\nSuccessfully extracted and uploaded **{successful}/{total}** files.")
             
     except Exception as e:
         logger.error(f"Mega handler critical error: {e}")
         await status_msg.edit(f"❌ **System Error:**\n\n`{str(e)[:800]}`")
+    finally:
+        # 🔴 INSTANT DIRECTORY PURGE TO PROTECT SERVER STORAGE 🔴
+        if 'task_dir' in locals() and os.path.exists(task_dir):
+            shutil.rmtree(task_dir, ignore_errors=True)
 
 # ==========================================
 # 🛡 ADMIN COMMANDS & WEB SERVER
