@@ -281,10 +281,18 @@ async def web_handler(request):
     return web.Response(text="Service Active!")
 
 async def start_webserver():
-    runner = web.AppRunner(web.Application().add_routes([web.get('/', web_handler)]))
+    # 1. Create the application first
+    web_app = web.Application()
+    
+    # 2. Add the routes to the application
+    web_app.add_routes([web.get('/', web_handler)])
+    
+    # 3. Pass the actual application into the runner
+    runner = web.AppRunner(web_app)
+    
     await runner.setup()
     await web.TCPSite(runner, '0.0.0.0', PORT).start()
-    logger.info(f"Web server started on port {PORT}")
+    logger.info(f"🌐 Cloud Health-Check Web Server initialized on Port {PORT}")
 
 async def main():
     await setup_database()
