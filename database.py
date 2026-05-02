@@ -1,11 +1,23 @@
+import logging
 from motor.motor_asyncio import AsyncIOMotorClient
+from pyrogram.types import Message
 from config import MONGO_URI
 
-client = AsyncIOMotorClient(MONGO_URI)
-db = client['MegaBotDB']
-users_col = db['users']
+logger = logging.getLogger("Database")
 
-async def add_user(user_id, username):
+try:
+    client = AsyncIOMotorClient(MONGO_URI)
+    db = client['MegaBotDB']
+    users_col = db['users']
+except Exception as e:
+    logger.critical(f"Database connection failed: {e}")
+
+async def setup_database():
+    """Creates database indexes for faster querying."""
+    await users_col.create_index("_id", unique=True)
+    logger.info("Database indexed successfully.")
+
+async def add_user(user_id: int, username: str):
     if not await users_col.find_one({"_id": user_id}):
         await users_col.insert_one({
             "_id": user_id, 
@@ -13,21 +25,21 @@ async def add_user(user_id, username):
             "is_banned": False,
             "target_channel": None,
             "quality": "360p",
-            "state": None # Used for the /set_channel conversation
+            "state": None
         })
 
-async def get_all_users():
+async def get_all_users() -> list:
     return await users_col.find().to_list(length=None)
 
-async def ban_user(user_id, state=True):
+async def ban_user(user_id: int, state: bool = True):
     await users_col.update_one({"_id": user_id}, {"$set": {"is_banned": state}})
 
-async def is_banned(user_id):
-    user = await users_col.find_one({"_id": user_id})
-    return user.get("is_banned", False) if user else False
-
-async def update_settings(user_id, key, value):
+async def update_settings(user_id: int, key: str, value: any):
     await users_col.update_one({"_id": user_id}, {"$set": {key: value}})
 
-async def get_user(user_id):
-    return await users_col.find_one({"_id": user_id})
+async def get_user(user_id: int) -> dict:
+    return await users_col.find_one({"_id": user_id}) or {}
+
+async def is_banned(user_id: int) -> bool:
+    user = await get_user(user_id)
+    return user.get("is_banned", False)
