@@ -117,7 +117,7 @@ async def conversation_handler(client, message):
             await message.reply("❌ **Invalid Format!** Must be a numeric ID.")
 
 # ==========================================
-# 📊 PROGRESS BAR ENGINE
+# 📊 PROGRESS BAR ENGINE (UPLOAD)
 # ==========================================
 last_edit_time = {}
 
@@ -153,12 +153,44 @@ async def progress_bar(current, total, status_msg, start_time, current_file, tot
 # ==========================================
 # 🚀 CORE ENGINE: AUTHENTICATED BATCH EXTRACTION
 # ==========================================
-async def execute_cmd(cmd: str) -> tuple[str, str, int]:
+async def execute_cmd_with_progress(cmd: str, status_msg) -> tuple[str, int]:
+    """Runs a shell command and streams its output to Telegram live."""
     process = await asyncio.create_subprocess_shell(
-        cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT
     )
-    stdout, stderr = await process.communicate()
-    return stdout.decode().strip(), stderr.decode().strip(), process.returncode
+    
+    last_update = time.time()
+    full_output = []
+    
+    while True:
+        # Read the terminal output in tiny chunks
+        chunk = await process.stdout.read(1024)
+        if not chunk:
+            break
+        
+        decoded = chunk.decode(errors='ignore')
+        full_output.append(decoded)
+        
+        now = time.time()
+        # Update Telegram every 4 seconds to avoid FloodWaits
+        if now - last_update > 4.0:
+            # Megatools uses \r to overwrite text, so we split by that to get the real last line
+            lines = decoded.replace('\r', '\n').strip().split('\n')
+            tail = lines[-1].strip() if lines else ""
+            
+            if tail and any(char.isdigit() for char in tail): 
+                try:
+                    await status_msg.edit(
+                        f"📥 **Downloading Payload to Server...**\n\n"
+                        f"**Live Server Output:**\n`{tail[:80]}`\n\n"
+                        f"_Please be patient, massive folders take time._"
+                    )
+                    last_update = now
+                except Exception:
+                    pass
+                    
+    await process.wait()
+    return "".join(full_output), process.returncode
 
 async def process_single_upload(client, message, file_path, status_msg, user, current, total):
     quality = user.get("quality", "360p")
@@ -216,13 +248,14 @@ async def handle_mega(client, message):
         task_dir = os.path.join(DOWNLOAD_DIR, str(uuid.uuid4()))
         os.makedirs(task_dir, exist_ok=True)
         
-        await status_msg.edit("📥 **Downloading Payload to Server...**\n\n_Because this is a public folder, I am downloading the full package first. I will separate and upload the files sequentially right after._")
+        await status_msg.edit("📥 **Initializing Server Download...**")
         
+        # Using the new live-stream command executor
         dl_cmd = f"megadl --config {MEGARC_PATH} '{url}' --path '{task_dir}'"
-        stdout, stderr, code = await execute_cmd(dl_cmd)
+        output, code = await execute_cmd_with_progress(dl_cmd, status_msg)
         
         if code != 0:
-            raise Exception(f"Download failed. Check link or storage limits:\n`{stderr or stdout}`")
+            raise Exception(f"Download failed. Check link or storage limits:\n`{output[:300]}`")
 
         downloaded_files = []
         for root, dirs, files in os.walk(task_dir):
