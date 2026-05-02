@@ -1,27 +1,21 @@
-# Mega.nz Downloader Bot 🚀
+# 🚀 Advanced Mega.nz Downloader Bot
 
-A highly professional, fully async Telegram bot that handles Mega.nz downloads, FFmpeg video transcoding, and MongoDB user tracking.
+An enterprise-grade Telegram bot designed to securely bypass Mega.nz restrictions and download massive public folders. Built with strict memory management and sequential extraction architecture to prevent server overflow on low-tier hosting (Render/Koyeb).
 
-## 🌟 Key Features
-- **Mega Support:** Handles files and folders.
-- **Video Transcoding:** Automatically scales videos to 360p, 480p, or 720p using FFmpeg.
-- **MongoDB Tracking:** Logs users, stores quality preferences, and manages target channels.
-- **Dump Channel:** All downloaded files are securely logged in a central dump channel.
-- **Admin Controls:** Comprehensive ban, unban, user listing, and restart commands.
+## ✨ Advanced Features
+- **Sequential Extraction:** Evaluates folder nodes and downloads files strictly one-by-one to conserve disk space.
+- **Pre-compiled Regex & Indexing:** Optimized parsing and MongoDB indexing for rapid query execution.
+- **FFmpeg Faststart Integration:** Transcoded videos are optimized for instant Telegram streaming.
+- **Stateful Conversations:** Interactive UI for binding target channels.
+- **Secure Subprocessing:** Asynchronous shell execution with strict memory leak prevention.
 
-## ⚙️ Deployment Settings
+## 🛠️ Deployment Instructions
+1. Fork or clone this repository.
+2. Setup a free MongoDB Cluster and a burner Mega.nz account.
+3. Add your credentials to your Cloud Host's Environment Variables (refer to `.env.example`).
+4. Deploy using Docker. The `Dockerfile` handles all system dependencies automatically.
 
-Create a `.env` file referencing `.env.example`.
-
-### Docker Deployment (Recommended)
-```bash
-docker-compose up -d --𝗯𝘂𝗶𝗹𝗱
-
-### 𝗠𝗲𝗻𝘂𝗮𝗹 𝗗𝗲𝗽𝗹𝗼𝘆
-```bash
-python -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-python bot.py
-```
-
+## 📝 Admin Commands
+* `/users` - Export total database registry.
+* `/ban [ID]` / `/unban [ID]` - Manage access control.
+* `/restart` - Safely trigger a server reboot.
