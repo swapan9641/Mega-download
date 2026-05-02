@@ -21,7 +21,7 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 MONGO_URI = os.environ.get("MONGO_URI", "")
 DUMP_CHANNEL = int(os.environ.get("DUMP_CHANNEL", "0"))
 ADMINS = [int(x) for x in os.environ.get("ADMINS", "").split()]
-CREDIT_TEXT = os.environ.get("CREDIT_TEXT", "\n\n**✨ Downloaded by @YourBot**")
+CREDIT_TEXT = os.environ.get("@use_full_shortbot", "\n\n**✨ Downloaded by @mega_nzleech_bot")
 
 MEGA_EMAIL = os.environ.get("MEGA_EMAIL", "")
 MEGA_PASSWORD = os.environ.get("MEGA_PASSWORD", "")
