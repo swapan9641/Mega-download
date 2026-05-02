@@ -1,7 +1,32 @@
+.# Environments
 .env
-.venv
+.env.local
+.env.*
+
+# Mega Authentication
+.megarc
+
+# Downloads / Temp files
+downloads/
+users_list.txt
+*.mp4
+*.mkv
+*.zip
+*.avi
+*.webm
+
+# Python & Build
 __pycache__/
 *.py[cod]
+*$py.class
+*.so
+build/
+dist/
+*.egg-info/
+
+# Logs
 *.log
-downloads/
-temp/
+
+# OS generated files
+.DS_Store
+Thumbs.db
