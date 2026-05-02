@@ -4,6 +4,8 @@ import asyncio
 import uuid
 import shutil
 import contextlib
+import time
+import math
 from aiohttp import web
 from pyrogram import Client, filters, idle
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -115,10 +117,43 @@ async def conversation_handler(client, message):
             await message.reply("❌ **Invalid Format!** Must be a numeric ID.")
 
 # ==========================================
+# 📊 PROGRESS BAR ENGINE
+# ==========================================
+last_edit_time = {}
+
+async def progress_bar(current, total, status_msg, start_time, current_file, total_files):
+    now = time.time()
+    msg_id = status_msg.id
+    
+    if msg_id in last_edit_time and (now - last_edit_time[msg_id]) < 3.0:
+        if current != total:
+            return
+            
+    last_edit_time[msg_id] = now
+    
+    percentage = current * 100 / total
+    speed = current / (now - start_time) if (now - start_time) > 0 else 1
+    eta = round((total - current) / speed) if speed > 0 else 0
+    
+    completed_blocks = math.floor(percentage / 5)
+    remaining_blocks = 20 - completed_blocks
+    progress_str = f"[{'█' * completed_blocks}{'░' * remaining_blocks}]"
+    
+    text = (f"📤 **Uploading File {current_file}/{total_files}**\n\n"
+            f"{progress_str}\n\n"
+            f"**🚀 Progress:** `{round(percentage, 2)}%`\n"
+            f"**⚡ Speed:** `{round(speed / 1024 / 1024, 2)} MB/s`\n"
+            f"**⏳ ETA:** `{eta} Seconds`")
+    
+    try:
+        await status_msg.edit(text)
+    except Exception:
+        pass
+
+# ==========================================
 # 🚀 CORE ENGINE: AUTHENTICATED BATCH EXTRACTION
 # ==========================================
 async def execute_cmd(cmd: str) -> tuple[str, str, int]:
-    """Robust async subprocess executor."""
     process = await asyncio.create_subprocess_shell(
         cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
     )
@@ -139,12 +174,15 @@ async def process_single_upload(client, message, file_path, status_msg, user, cu
                 os.remove(file_path)
             upload_path = converted
 
-    await status_msg.edit(f"📤 **Uploading File {current}/{total}**\n`{os.path.basename(upload_path)}`")
+    start_time = time.time()
     
     try:
         dump_msg = await client.send_document(
-            chat_id=DUMP_CHANNEL, document=upload_path, 
-            caption=f"📁 **File:** `{os.path.basename(upload_path)}`\n👤 **User:** `{message.from_user.id}`{CREDIT_TEXT}"
+            chat_id=DUMP_CHANNEL, 
+            document=upload_path, 
+            caption=f"📁 **File:** `{os.path.basename(upload_path)}`\n👤 **User:** `{message.from_user.id}`{CREDIT_TEXT}",
+            progress=progress_bar,
+            progress_args=(status_msg, start_time, current, total)
         )
         if target:
             await dump_msg.copy(chat_id=target)
@@ -159,7 +197,6 @@ async def process_single_upload(client, message, file_path, status_msg, user, cu
         logger.error(f"Upload error: {e}")
         await client.send_message(chat_id=message.chat.id, text=f"⚠️ Upload failed for `{os.path.basename(upload_path)}`")
     finally:
-        # STRICT CLEANUP
         with contextlib.suppress(FileNotFoundError):
             os.remove(upload_path)
 
@@ -179,7 +216,6 @@ async def handle_mega(client, message):
         task_dir = os.path.join(DOWNLOAD_DIR, str(uuid.uuid4()))
         os.makedirs(task_dir, exist_ok=True)
         
-        # We download the folder using your authenticated credentials
         await status_msg.edit("📥 **Downloading Payload to Server...**\n\n_Because this is a public folder, I am downloading the full package first. I will separate and upload the files sequentially right after._")
         
         dl_cmd = f"megadl --config {MEGARC_PATH} '{url}' --path '{task_dir}'"
@@ -188,7 +224,6 @@ async def handle_mega(client, message):
         if code != 0:
             raise Exception(f"Download failed. Check link or storage limits:\n`{stderr or stdout}`")
 
-        # Map all downloaded files to upload them one-by-one
         downloaded_files = []
         for root, dirs, files in os.walk(task_dir):
             for file in files:
@@ -217,7 +252,6 @@ async def handle_mega(client, message):
         logger.error(f"Mega handler critical error: {e}")
         await status_msg.edit(f"❌ **System Error:**\n\n`{str(e)[:800]}`")
     finally:
-        # 🔴 INSTANT DIRECTORY PURGE TO PROTECT SERVER STORAGE 🔴
         if 'task_dir' in locals() and os.path.exists(task_dir):
             shutil.rmtree(task_dir, ignore_errors=True)
 
@@ -261,18 +295,12 @@ async def web_handler(request):
     return web.Response(text="Service Active!")
 
 async def start_webserver():
-    # 1. Create the application first
     web_app = web.Application()
-    
-    # 2. Add the routes to the application
     web_app.add_routes([web.get('/', web_handler)])
-    
-    # 3. Pass the actual application into the runner
     runner = web.AppRunner(web_app)
-    
     await runner.setup()
     await web.TCPSite(runner, '0.0.0.0', PORT).start()
-    logger.info(f"🌐 Cloud Health-Check Web Server initialized on Port {PORT}")
+    logger.info(f"Web server started on port {PORT}")
 
 async def main():
     await setup_database()
