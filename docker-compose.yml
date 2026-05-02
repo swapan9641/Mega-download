@@ -1,13 +1,21 @@
 version: '3.8'
 
 services:
-  bot:
+  megabot:
     build: .
-    container_name: mega_bot
-    restart: unless-stopped
+    container_name: mega-downloader-bot
+    restart: always
     env_file:
       - .env
     ports:
-      - "${PORT:-8080}:8080"
+      - "8080:8080"
     volumes:
-      - ./downloads:/app/downloads
+      # Optional: You can uncomment the line below if you want to inspect downloaded 
+      # files on your host machine before the bot deletes them. 
+      # Otherwise, it runs faster using the container's internal storage.
+      # - ./downloads:/app/downloads
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
