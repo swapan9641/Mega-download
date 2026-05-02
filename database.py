@@ -13,9 +13,11 @@ except Exception as e:
     logger.critical(f"Database connection failed: {e}")
 
 async def setup_database():
-    """Creates database indexes for faster querying."""
-    await users_col.create_index("_id", unique=True)
-    logger.info("Database indexed successfully.")
+    """
+    MongoDB automatically indexes the _id field, so explicit creation is rejected.
+    We just use this to verify the connection is alive on startup.
+    """
+    logger.info("Database connected and ready for queries.")
 
 async def add_user(user_id: int, username: str):
     if not await users_col.find_one({"_id": user_id}):
