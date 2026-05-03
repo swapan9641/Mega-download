@@ -255,18 +255,13 @@ async def progress_bar(current, total, status_msg, start_time, current_file, tot
 # 🚀 CORE ENGINE: BATCH EXTRACTION WITH DYNAMIC AUTH
 # ==========================================
 async def process_single_upload(client, message, file_path, status_msg, user, current, total):
-    quality = user.get("quality", "360p")
     target = user.get("target_channel")
     upload_path = file_path
 
-    if file_path.lower().endswith(('.mp4', '.mkv', '.avi', '.webm')):
-        await status_msg.edit(f"⚙️ **Transcoding File {current}/{total}**\nProcessing to {quality}...")
-        converted = os.path.join(DOWNLOAD_DIR, f"conv_{os.path.basename(file_path)}")
-        
-        if await convert_video(file_path, converted, quality):
-            with contextlib.suppress(FileNotFoundError):
-                os.remove(file_path)
-            upload_path = converted
+    # 🛑 WE HAVE DISABLED FFMPEG TRANSCODING TO SAVE RENDER RAM 🛑
+    # if file_path.lower().endswith(('.mp4', '.mkv', '.avi', '.webm')):
+    #     await status_msg.edit(f"⚙️ **Transcoding File {current}/{total}...**")
+    #     ...
 
     start_time = time.time()
     
@@ -284,9 +279,11 @@ async def process_single_upload(client, message, file_path, status_msg, user, cu
             await dump_msg.copy(chat_id=message.chat.id)
             
     except FloodWait as e:
+        logger.warning(f"FloodWait triggered. Sleeping for {e.value} seconds.")
         await asyncio.sleep(e.value)
         await client.send_document(chat_id=message.chat.id, document=upload_path)
     except Exception as e:
+        logger.error(f"Upload error: {e}")
         await client.send_message(chat_id=message.chat.id, text=f"⚠️ Upload failed for `{os.path.basename(upload_path)}`")
     finally:
         with contextlib.suppress(FileNotFoundError):
